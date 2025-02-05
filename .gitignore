@@ -1,0 +1,15 @@
+/projects_storage
+/__pycache__
+/.idea
+__pycache__/
+.vscode/
+.pytest_cache/
+/venv
+.codebuddy
+/.cache
+/.VSCodeCounter
+
+logs
+*.log
+.env
+.env
