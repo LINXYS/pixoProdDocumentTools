@@ -20,6 +20,7 @@ class IngestionConfig:
             chunk_overlap: int = 200,
             use_chunking: bool = True,
             embedding_provider: str = "openai",
+            llm_provider: str = "openai",
             collection_name: str = "documents",
             record_manager_db_url: str = None,
     ):
@@ -28,6 +29,7 @@ class IngestionConfig:
         self.chunk_overlap = chunk_overlap
         self.use_chunking = use_chunking
         self.embedding_provider = embedding_provider
+        self.llm_provider = llm_provider
         self.collection_name = collection_name
         # Use the provided record_manager_db_url or default to the main database URL.
         self.record_manager_db_url = record_manager_db_url or database_url
@@ -55,7 +57,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
             "chunk_overlap": 200,
             "use_chunking": True,
             "embedding_provider": "openai",
-            "collection_name": "documents"
+            "llm_provider": "openai",
+            "project_id": "documents",
         }
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(default_config, f)
@@ -73,7 +76,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     chunk_overlap = config_data.get("chunk_overlap", 200)
     use_chunking = config_data.get("use_chunking", True)
     embedding_provider = config_data.get("embedding_provider", "openai")
-    collection_name = config_data.get("collection_name", "documents")
+    llm_provider = config_data.get("llm_provider", "openai")
+    collection_name = config_data.get("project_id", "documents")
 
     # Load the vectorstore database URL from the environment.
     db_url = os.getenv("DATABASE_URL")
@@ -92,6 +96,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         chunk_overlap=chunk_overlap,
         use_chunking=use_chunking,
         embedding_provider=embedding_provider,
+        llm_provider=llm_provider,
         collection_name=collection_name,
         record_manager_db_url=record_manager_db_url,
     )

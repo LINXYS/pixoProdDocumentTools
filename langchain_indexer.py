@@ -98,7 +98,7 @@ class LangChainIndexer:
 
         # Query the LLM to generate AttributeInfo objects
         prompt = f"Given the following metadata keys: {', '.join(metadata_keys)}, generate a list of AttributeInfo objects. Each object should have a name, description, and type. The type should be one of: string, integer, float, boolean, or list[string]."
-        llm_response = query_llm(prompt)
+        llm_response = query_llm(prompt, self.config)
 
         # Parse the LLM response
         metadata_field_info = json.loads(llm_response)
