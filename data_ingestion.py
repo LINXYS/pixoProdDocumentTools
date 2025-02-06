@@ -1,9 +1,13 @@
+import glob
 import logging
+import os
+from os.path import join
 from typing import List
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_unstructured import UnstructuredLoader
 from tqdm import tqdm
 
 from cfg import IngestionConfig
@@ -54,3 +58,19 @@ class DataIngestionApp:
             self.indexer.index_documents(all_documents, cleanup_mode=cleanup_mode)
         else:
             logging.info("No documents to index.")
+
+    def getUnstructuredLoader(self, directory_path: str):
+        """
+        Create a new unstructured loader.
+        """
+
+        files = glob.glob(join(directory_path, "**/*"), recursive=True)
+        files = [f for f in files if os.path.isfile(f)]
+
+        return UnstructuredLoader(
+            file_path=files,
+            chunking_strategy="basic",
+            max_characters=self.config.chunk_size*4,
+            overlap=self.config.chunk_overlap*4,
+            include_orig_elements=False,
+        )
