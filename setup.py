@@ -1,7 +1,6 @@
 import os
 import shutil
 import requests
-import json
 
 import yaml
 from dotenv import load_dotenv
