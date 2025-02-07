@@ -1,14 +1,12 @@
 import logging
-import json
 from typing import List
 
-from langchain.chains.query_constructor.schema import AttributeInfo
 from langchain.indexes import SQLRecordManager
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import PGVector
 from langchain_core.documents import Document
 from langchain_core.indexing import index
 from langchain_openai import OpenAIEmbeddings
+from langchain_postgres import PGVector
 from sqlalchemy import create_engine
 
 from cfg import IngestionConfig
@@ -36,9 +34,9 @@ class LangChainIndexer:
 
         # Create a PGVector vectorstore using Postgres.
         self.vectorstore = PGVector(
-            embedding_function=embedding,
+            embeddings=embedding,
             collection_name=config.collection_name,
-            connection_string=config.database_url,
+            connection=config.database_url,
             engine_args={"client_encoding": "utf8"},
             use_jsonb=True
         )
