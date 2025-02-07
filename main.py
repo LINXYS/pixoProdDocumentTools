@@ -1,10 +1,4 @@
-import glob
 import logging
-import os
-from os.path import join
-
-from langchain_community.document_loaders import DirectoryLoader
-from langchain_unstructured import UnstructuredLoader
 
 from cfg import load_config
 from data_ingestion import DataIngestionApp
@@ -29,7 +23,7 @@ def main():
     # Create the main application instance.
     app = DataIngestionApp(config=config)
 
-    loader = app.getUnstructuredLoader(directory_path="test")
+    loader = app.getUnstructuredLoader(directory_path="files")
 
     app.register_loader(loader)
 
