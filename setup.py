@@ -1,9 +1,11 @@
 import os
 import shutil
 import requests
-
 import yaml
 from dotenv import load_dotenv
+import secrets
+
+from web.server import run_server
 
 API_URL_FILE = "api_url.txt"
 
@@ -228,8 +230,12 @@ def main():
         project_dir = f"{project_name.replace(' ', '_').lower()}({project_id})"
     else:
         project_dir = project_name.replace(" ", "_").lower()
+
     os.makedirs(project_dir, exist_ok=True)
-    os.makedirs(os.path.join(project_dir, 'files'), exist_ok=True)
+
+    # Create the 'files' folder inside the project directory
+    files_folder_path = os.path.join(project_dir, 'files')
+    os.makedirs(files_folder_path, exist_ok=True)
 
     try:
         shutil.copy2('main.py', os.path.join(project_dir, 'main.py'))
@@ -238,9 +244,8 @@ def main():
         return
 
     # --- Write YAML Config File ---
-    # Adjust the config dictionary to include only the desired keys and values.
     config = {
-        "chunk_overlap": 200,            # Updated value as requested
+        "chunk_overlap": 200,            # Example updated value
         "chunk_size": 1000,
         "embedding_provider": "openai",
         "project_id": project_id or "documents",  # Use the project ID or a default value
@@ -249,7 +254,6 @@ def main():
     config_path = os.path.join(project_dir, 'config.yaml')
     try:
         with open(config_path, 'w', encoding='utf-8') as f:
-            # Write in YAML format with a clean, block-style (not flow style)
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     except Exception as e:
         print(f"Error writing config file: {e}")
@@ -271,6 +275,20 @@ def main():
         )
     else:
         print("No scheduling method was selected; the scripts will simply execute main.py when run.")
+
+    # --- Offer to run the Web Interface ---
+    run_web = input(
+        "\nDo you want to start the web interface for file uploads and starting the process now? (y/n): ").strip().lower()
+    if run_web == 'y':
+        import secrets
+        upload_token = secrets.token_urlsafe(16)
+        # Run the server with both the files folder and the project directory.
+        from web.server import run_server
+        run_server(upload_token, files_folder_path, project_dir, host="127.0.0.1", port=5000)
+    else:
+        print(
+            "You can later run the web interface by calling `run_server()` with a token, the files folder, and the project directory.")
+
 
 if __name__ == "__main__":
     main()
