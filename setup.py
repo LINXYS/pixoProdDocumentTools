@@ -7,6 +7,9 @@ import secrets
 
 from web.server import run_server
 
+# (Assuming the above server code is in web/server.py)
+# from web.server import run_server
+
 API_URL_FILE = "api_url.txt"
 
 
@@ -262,32 +265,88 @@ def main():
     # Generate the scheduling scripts (both .bat and .sh)
     create_schedule_scripts(project_dir, project_name, schedule_method)
 
+    ############################################################################
+    #                   Generate Server Start Scripts                          #
+    ############################################################################
+    # Generate a token to secure the web interface (server) and save it.
+    server_token = secrets.token_urlsafe(16)
+    server_token_file = os.path.join(project_dir, "server_token.txt")
+    with open(server_token_file, "w", encoding="utf-8") as f:
+        f.write(server_token)
+    print(f"Server token saved to {server_token_file}")
+
+    # Create a Windows batch file to start the server.
+    # Create a Windows batch file to start the server.
+    bat_server_path = os.path.join(project_dir, "start_server.bat")
+    with open(bat_server_path, "w", encoding="utf-8") as f:
+        f.write(f"""@echo off
+
+    REM Change directory to the folder that contains this BAT file
+    pushd %~dp0
+
+    REM Go up ONE level (adjust if you actually need more) to get back to pixoDocumentToolsV3 root
+    cd ..\\
+
+    REM Activate the virtual environment
+    call venv\\Scripts\\activate.bat
+
+    REM Run the server, passing the required parameters
+    python -c "from web.server import run_server; run_server('{server_token}', 'files', '{project_dir}', host='127.0.0.1', port=5000)"
+
+    REM Return to original folder
+    popd
+    pause
+    """)
+    print(f"Created {bat_server_path}")
+
+    # Create a Unix-like shell script to start the server.
+    sh_server_path = os.path.join(project_dir, "start_server.sh")
+    with open(sh_server_path, "w", encoding="utf-8") as f:
+        f.write(f"""#!/bin/bash
+    # Start the web interface for file uploads and process.
+    # The server will automatically terminate after 1 hour.
+
+    # Move to the directory containing this script
+    cd "$(dirname "$0")"
+
+    # Go up ONE level to the project root (adjust '..' as needed)
+    cd ..
+
+    # Activate the virtual environment
+    source venv/bin/activate
+
+    # Run the server, passing the required parameters
+    python -c "from web.server import run_server; run_server('{server_token}', 'files', '.')"
+    """)
+    os.chmod(sh_server_path, 0o755)
+    print(f"Created {sh_server_path}")
+
     print(f"\nSetup complete! Files have been created in '{project_dir}':\n")
     print("  - main.py (ingestion script)")
     print("  - config.yaml (YAML config)")
     print("  - schedule_ingestion.bat (Windows scheduling or execution script)")
     print("  - schedule_ingestion.sh  (Unix-like scheduling or execution script)")
+    print("  - start_server.bat and start_server.sh (to start the file upload web interface)")
     if schedule_method:
         print(
-            "\nNOTE: The scripts do not run automatically. To actually schedule the job:\n"
+            "\nNOTE: The scheduling scripts do not run automatically. To actually schedule the job:\n"
             "  - On Windows, open a command prompt and run 'schedule_ingestion.bat'\n"
             "  - On Unix-like systems, run 'schedule_ingestion.sh'\n"
         )
     else:
-        print("No scheduling method was selected; the scripts will simply execute main.py when run.")
+        print("No scheduling method was selected; the scheduling scripts will simply execute main.py when run.")
 
-    # --- Offer to run the Web Interface ---
+    # --- Offer to run the Web Interface Immediately ---
     run_web = input(
-        "\nDo you want to start the web interface for file uploads and starting the process now? (y/n): ").strip().lower()
+        "\nDo you want to start the web interface for file uploads and starting the process now? (y/n): "
+    ).strip().lower()
     if run_web == 'y':
-        import secrets
-        upload_token = secrets.token_urlsafe(16)
-        # Run the server with both the files folder and the project directory.
-        from web.server import run_server
-        run_server(upload_token, files_folder_path, project_dir, host="127.0.0.1", port=5000)
+        # Start the web server immediately using the generated token.
+        run_server(server_token, files_folder_path, project_dir, host="127.0.0.1", port=5000)
     else:
         print(
-            "You can later run the web interface by calling `run_server()` with a token, the files folder, and the project directory.")
+            "You can later run the web interface by executing the generated start_server scripts (start_server.bat or start_server.sh)."
+        )
 
 
 if __name__ == "__main__":
