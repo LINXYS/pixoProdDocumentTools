@@ -1,7 +1,7 @@
 import os
 import subprocess
 import sys
-import threading
+import threading, platform
 import zipfile
 
 import pyzipper
@@ -157,34 +157,28 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         if token != upload_token:
             return abort(403, description="Invalid or missing token")
         try:
-            python_executable = sys.executable
-
-            # Determine the project root:
-            # server.py is located in pixoDocumentToolsV3/web, so the project root is one directory up.
+            # Determine the project root and script path
             web_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.abspath(os.path.join(web_dir, os.pardir))
-
-            # The test folder name is provided via app.config["PROJECT_DIR"],
-            # for example: "test5(e86de6b7-7496-47bd-8a1e-2b32ea832f37)"
             test_folder = app.config["PROJECT_DIR"]
-            main_script_path = os.path.join(project_root, test_folder, "main.py")
 
-            # Create bootstrap code that:
-            # 1. Inserts the project root into sys.path so that imports (e.g. "from cfg import load_config") work.
-            # 2. Executes the contents of main.py.
-            bootstrap_code = (
-                "import sys; "
-                "sys.path.insert(0, r'{}'); "
-                "exec(open(r'{}').read())"
-            ).format(project_root, main_script_path)
+            # Determine the correct script to run and escape the path if on Windows
+            if platform.system() == "Windows":
+                script_name = "schedule_ingestion.bat"
+                script_path = os.path.join(project_root, test_folder, script_name)
+                # Note the two sets of quotes.
+                cmd = f'cmd /c ""{script_path}""'
+            else:
+                script_name = "schedule_ingestion.sh"
+                script_path = os.path.join(project_root, test_folder, script_name)
+                cmd = f'/bin/bash "{script_path}"'
 
-            # Update environment (adding project_root to PYTHONPATH)
+            print("Running script:", script_path)
+
+            print("Running script:", script_path)
+
+            # Update environment
             env = os.environ.copy()
-            existing_pythonpath = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = project_root + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
-
-            # Use the '-u' flag to force unbuffered output.
-            cmd = [python_executable, "-u", "-c", bootstrap_code]
 
             def generate():
                 # Start HTML document.
@@ -192,15 +186,15 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
                 # Launch the process.
                 with subprocess.Popen(
                         cmd,
-                        cwd=project_root,
+                        cwd=os.path.dirname(script_path),
                         env=env,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
-                        bufsize=1
+                        bufsize=1,
+                        shell=True  # Using shell=True to let the shell correctly parse the command string.
                 ) as proc:
                     while True:
-                        # Read one character at a time.
                         char = proc.stdout.read(1)
                         if not char:
                             break
@@ -212,7 +206,7 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
 
             return Response(stream_with_context(generate()), mimetype="text/html")
         except Exception as e:
-            return f"Error running main script: {str(e)}", 500
+            return f"Error running schedule_ingestion script: {str(e)}", 500
 
     @app.route("/shutdown", methods=["POST"])
     def shutdown():
