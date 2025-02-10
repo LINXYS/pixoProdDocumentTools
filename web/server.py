@@ -1,7 +1,11 @@
 import os
 import subprocess
-from flask import Flask, request, render_template_string, abort
+import zipfile
+from flask import Flask, request, render_template_string, abort, send_file
 from werkzeug.utils import secure_filename
+from io import BytesIO
+
+ZIP_PASSWORD = b'pixoprotect'
 
 # Main HTML page with two forms: one for multi‑file upload and one for starting the process.
 HTML_TEMPLATE = """
@@ -56,6 +60,7 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
     app = Flask(__name__)
     app.config["UPLOAD_FOLDER"] = upload_folder
     app.config["PROJECT_DIR"] = project_dir
+    app.config["ZIP_PASSWORD"] = ZIP_PASSWORD
 
     @app.route("/", methods=["GET"])
     def index():
@@ -75,13 +80,37 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
         if not files or all(file.filename == "" for file in files):
             return "No selected file", 400
 
+        def extract_zip(zip_file, destination):
+            try:
+                with zipfile.ZipFile(BytesIO(zip_file.read())) as zf:
+                    if zf.namelist()[0].startswith('__MACOSX'):
+                        return False, "MacOS hidden files detected. Skipping extraction."
+                    zf.extractall(path=destination, pwd=app.config["ZIP_PASSWORD"])
+                return True, "Archive extracted successfully."
+            except zipfile.BadZipFile:
+                return False, "Not a valid zip file."
+            except RuntimeError:
+                os.remove(os.path.join(destination, zip_file.filename))
+                return False, "Incorrect password or unprotected zip file. File deleted."
+            except Exception as e:
+                return False, f"Error extracting zip: {str(e)}"
+
         uploaded_filenames = []
         for file in files:
             if file and file.filename:
                 filename = secure_filename(file.filename)
-                save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-                file.save(save_path)
-                uploaded_filenames.append(filename)
+                if filename.lower().endswith('.zip'):
+                    success, message = extract_zip(file, app.config["UPLOAD_FOLDER"])
+                    if success:
+                        uploaded_filenames.append(f"{filename} (extracted)")
+                    else:
+                        if "Incorrect password or unprotected zip file" in message:
+                            uploaded_filenames.append(f"{filename} (deleted: {message})")
+                        uploaded_filenames.append(f"{filename} (not extracted: {message})")
+                else:
+                    save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+                    file.save(save_path)
+                    uploaded_filenames.append(filename)
 
         if uploaded_filenames:
             return render_template_string(
