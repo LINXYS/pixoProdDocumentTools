@@ -63,15 +63,15 @@ UPLOAD_RESULT_TEMPLATE = """
 """
 
 
-def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask:
+def create_app(upload_token: str, project_dir: str) -> Flask:
     """
     Create and configure a Flask app that:
       - Requires the provided upload_token to access any page.
-      - Saves uploaded files to upload_folder.
+      - Saves uploaded files to project_dir/files.
       - Runs the main script (main.py) from project_dir when requested.
     """
     app = Flask(__name__)
-    app.config["UPLOAD_FOLDER"] = upload_folder
+    app.config["UPLOAD_FOLDER"] = os.path.join(project_dir, "files")
     app.config["PROJECT_DIR"] = project_dir
     app.config["ZIP_PASSWORD"] = ZIP_PASSWORD
 
@@ -159,12 +159,13 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
         try:
             python_executable = sys.executable
 
-            # server.py is in pixoDocumentToolsV3/web, so the project root is one level up.
-            web_dir = os.path.dirname(os.path.abspath(__file__))  # pixoDocumentToolsV3/web
-            project_root = os.path.abspath(os.path.join(web_dir, os.pardir))  # pixoDocumentToolsV3
+            # Determine the project root:
+            # server.py is located in pixoDocumentToolsV3/web, so the project root is one directory up.
+            web_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.abspath(os.path.join(web_dir, os.pardir))
 
-            # The test folder is provided via app.config["PROJECT_DIR"],
-            # e.g., "test5(e86de6b7-7496-47bd-8a1e-2b32ea832f37)"
+            # The test folder name is provided via app.config["PROJECT_DIR"],
+            # for example: "test5(e86de6b7-7496-47bd-8a1e-2b32ea832f37)"
             test_folder = app.config["PROJECT_DIR"]
             main_script_path = os.path.join(project_root, test_folder, "main.py")
 
@@ -177,7 +178,7 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
                 "exec(open(r'{}').read())"
             ).format(project_root, main_script_path)
 
-            # Prepare the environment so that the project root is in PYTHONPATH (optional but can help)
+            # Update environment (adding project_root to PYTHONPATH)
             env = os.environ.copy()
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = project_root + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
@@ -186,7 +187,7 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
             cmd = [python_executable, "-u", "-c", bootstrap_code]
 
             def generate():
-                # Begin HTML output.
+                # Start HTML document.
                 yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
                 # Launch the process.
                 with subprocess.Popen(
@@ -195,18 +196,20 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
                         env=env,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
-                        text=True
+                        text=True,
+                        bufsize=1
                 ) as proc:
-                    # Stream each line as it's available.
-                    for line in iter(proc.stdout.readline, ""):
-                        # Optionally, you can wrap or format the line.
-                        yield line
-                # End the HTML output.
-                yield "</pre><br>"
-                yield "<button onclick=\"window.location.href='/?token={}'\">Back</button>".format(upload_token)
-                yield "</body></html>"
+                    while True:
+                        # Read one character at a time.
+                        char = proc.stdout.read(1)
+                        if not char:
+                            break
+                        yield char
+                # End HTML document.
+                yield "</pre>\n"
+                yield "<button onclick=\"window.location.href='/?token={}'\">Back</button>\n".format(upload_token)
+                yield "</body></html>\n"
 
-            # Return a streaming response.
             return Response(stream_with_context(generate()), mimetype="text/html")
         except Exception as e:
             return f"Error running main script: {str(e)}", 500
@@ -229,12 +232,12 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
     return app
 
 
-def run_server(upload_token: str, upload_folder: str, project_dir: str, host="127.0.0.1", port=5000):
+def run_server(upload_token: str, project_dir: str, host="127.0.0.1", port=5000):
     """
     Create the Flask app with the given token, upload folder, and project folder.
     Then, run the app. The server will automatically shut down after TIME_LIMIT seconds.
     """
-    app = create_app(upload_token, upload_folder, project_dir)
+    app = create_app(upload_token, project_dir)
     print(f"Starting web interface on http://{host}:{port}?token={upload_token}")
     print("Press Ctrl+C to stop the server.")
 

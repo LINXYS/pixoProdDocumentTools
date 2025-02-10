@@ -87,49 +87,96 @@ def create_project(url, token, project_name, store_conversations, prompt_or_temp
 
 def create_schedule_scripts(project_dir, project_name, schedule_method):
     """
-    Create two scripts (one .bat, one .sh) that either register a scheduled job
-    or simply run main.py using python. In all cases, the scripts will include a
-    command to execute 'python main.py'.
+    Create two scripts (one .bat for Windows and one .sh for Unix‑like systems)
+    that, when run (or registered as scheduled tasks), will:
+      - Determine the project folder and its parent (the project root),
+      - Activate the virtual environment (assumed to be in the project root's "venv" folder),
+      - Then run main.py using bootstrap code that inserts the project root into sys.path.
+
+    This ensures that imports (like `from cfg import load_config`) work correctly.
     """
-    # 1) Windows BAT file
+    # -------------------------------
+    # 1) Windows Batch Script
+    # -------------------------------
     bat_path = os.path.join(project_dir, "schedule_ingestion.bat")
     with open(bat_path, "w", encoding="utf-8") as f:
+        # Begin with standard commands to get the folder paths.
         f.write("@echo off\n")
-        f.write("REM This script will execute main.py using Python.\n\n")
-        # If a scheduling method is provided, add the registration command:
+        f.write("REM Determine the folder containing this BAT file (the project folder)\n")
+        f.write("set \"PROJECT_DIR=%~dp0\"\n")
+        f.write("if \"%PROJECT_DIR:~-1%\"==\"\\\" set \"PROJECT_DIR=%PROJECT_DIR:~0,-1%\"\n")
+        f.write("for %%I in (\"%PROJECT_DIR%\\..\") do set \"PROJECT_ROOT=%%~fI\"\n")
+        f.write("echo Project Directory: %PROJECT_DIR%\n")
+        f.write("echo Project Root: %PROJECT_ROOT%\n")
+        f.write("\n")
+        # Change to the project folder.
+        f.write("cd /d \"%PROJECT_DIR%\"\n")
+        # Activate the virtual environment (assumes the venv folder is in the project root)
+        f.write("call \"%PROJECT_ROOT%\\venv\\Scripts\\activate.bat\"\n")
+        f.write("\n")
+        # If a scheduling method is provided, register a scheduled task using a command that:
+        #   - remains in the project folder, and
+        #   - runs Python with bootstrap code (like your /start endpoint)
         if schedule_method:
             task_name = project_name.replace(" ", "_") + "_Task"
+            # Build the scheduled command.
+            # Note: When scheduled by Windows Task Scheduler, it's good to use cmd /c to run multiple commands.
+            scheduled_command = (
+                'cmd /c cd /d "%PROJECT_DIR%" && '
+                'python -u -c "import sys; sys.path.insert(0, r\'%PROJECT_ROOT%\'); '
+                'exec(open(r\'%PROJECT_DIR%\\main.py\', encoding=\'utf-8\').read())"'
+            )
             if schedule_method.lower() == "hourly":
-                f.write(f'schtasks /create /tn "{task_name}" /tr "python main.py" /sc HOURLY /mo 1 /f\n')
+                f.write(f'schtasks /create /tn "{task_name}" /tr "{scheduled_command}" /sc HOURLY /mo 1 /f\n')
             elif schedule_method.lower() == "daily":
-                f.write(f'schtasks /create /tn "{task_name}" /tr "python main.py" /sc DAILY /st 00:00 /f\n')
+                f.write(f'schtasks /create /tn "{task_name}" /tr "{scheduled_command}" /sc DAILY /st 00:00 /f\n')
             elif schedule_method.lower() == "once":
-                f.write(f'schtasks /create /tn "{task_name}" /tr "python main.py" /sc ONCE /st 00:00 /f\n')
+                f.write(f'schtasks /create /tn "{task_name}" /tr "{scheduled_command}" /sc ONCE /st 00:00 /f\n')
             else:
                 f.write("echo Unrecognized schedule method; scheduling command not added.\n")
-        # Always run main.py:
-        f.write("python main.py\n")
+        # Always run main.py using the bootstrap code.
+        f.write('python -u -c "import sys; sys.path.insert(0, r\'%PROJECT_ROOT%\'); '
+                'exec(open(r\'%PROJECT_DIR%\\main.py\', encoding=\'utf-8\').read())"\n')
         f.write("\npause\n")
 
-    # 2) Unix-like SH file
+    # -------------------------------
+    # 2) Unix‑like Shell Script
+    # -------------------------------
     sh_path = os.path.join(project_dir, "schedule_ingestion.sh")
     with open(sh_path, "w", encoding="utf-8") as f:
         f.write("#!/bin/bash\n")
-        f.write("# This script will execute main.py using Python.\n\n")
+        # Determine the folder where this script resides (the project folder)
+        f.write('PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"\n')
+        # Determine the project root (parent directory)
+        f.write('PROJECT_ROOT="$(dirname "$PROJECT_DIR")"\n')
+        f.write('echo "Project Directory: $PROJECT_DIR"\n')
+        f.write('echo "Project Root: $PROJECT_ROOT"\n')
+        f.write("\n")
+        # Change to the project folder.
+        f.write('cd "$PROJECT_DIR"\n')
+        # Activate the virtual environment (assumes venv is in the project root)
+        f.write('source "$PROJECT_ROOT/venv/bin/activate"\n')
+        f.write("\n")
         if schedule_method:
             if schedule_method.lower() == "hourly":
                 cron_line = "0 * * * *"
                 f.write("tmpfile=$(mktemp)\n")
-                f.write("crontab -l > \"$tmpfile\" 2>/dev/null\n")
-                f.write(f'echo "{cron_line} cd $(pwd) && python main.py # {project_name}" >> \"$tmpfile\"\n')
+                f.write('echo "' + cron_line +
+                        ' cd \'$PROJECT_DIR\' && '
+                        'python -u -c \\"import sys; sys.path.insert(0, r\'$PROJECT_ROOT\'); '
+                        'exec(open(r\'$PROJECT_DIR/main.py\', encoding=\'utf-8\').read())\\" '
+                        f'# {project_name}" >> "$tmpfile"\n')
                 f.write("crontab \"$tmpfile\"\n")
                 f.write("rm \"$tmpfile\"\n")
                 f.write('echo "Cron job set to run main.py every hour."\n')
             elif schedule_method.lower() == "daily":
                 cron_line = "0 0 * * *"
                 f.write("tmpfile=$(mktemp)\n")
-                f.write("crontab -l > \"$tmpfile\" 2>/dev/null\n")
-                f.write(f'echo "{cron_line} cd $(pwd) && python main.py # {project_name}" >> \"$tmpfile\"\n')
+                f.write('echo "' + cron_line +
+                        ' cd \'$PROJECT_DIR\' && '
+                        'python -u -c \\"import sys; sys.path.insert(0, r\'$PROJECT_ROOT\'); '
+                        'exec(open(r\'$PROJECT_DIR/main.py\', encoding=\'utf-8\').read())\\" '
+                        f'# {project_name}" >> "$tmpfile"\n')
                 f.write("crontab \"$tmpfile\"\n")
                 f.write("rm \"$tmpfile\"\n")
                 f.write('echo "Cron job set to run main.py once daily at midnight."\n')
@@ -138,8 +185,9 @@ def create_schedule_scripts(project_dir, project_name, schedule_method):
                 f.write("# No cron line added. You could manually add a one-time cron entry if needed.\n")
             else:
                 f.write('echo "Unrecognized schedule method; scheduling command not added."\n')
-        # Always run main.py:
-        f.write("python main.py\n")
+        # Always run main.py using the bootstrap code.
+        f.write('python -u -c "import sys; sys.path.insert(0, r\'$PROJECT_ROOT\'); '
+                'exec(open(r\'$PROJECT_DIR/main.py\', encoding=\'utf-8\').read())"\n')
     os.chmod(sh_path, 0o755)
 
 
@@ -291,7 +339,7 @@ def main():
     call venv\\Scripts\\activate.bat
 
     REM Run the server, passing the required parameters
-    python -c "from web.server import run_server; run_server('{server_token}', 'files', '{project_dir}', host='127.0.0.1', port=5000)"
+    python -c "from web.server import run_server; run_server('{server_token}', '{project_dir}', host='127.0.0.1', port=5000)"
 
     REM Return to original folder
     popd
@@ -316,7 +364,7 @@ def main():
     source venv/bin/activate
 
     # Run the server, passing the required parameters
-    python -c "from web.server import run_server; run_server('{server_token}', 'files', '.')"
+    python -c "from web.server import run_server; run_server('{server_token}', '.')"
     """)
     os.chmod(sh_server_path, 0o755)
     print(f"Created {sh_server_path}")
@@ -342,7 +390,7 @@ def main():
     ).strip().lower()
     if run_web == 'y':
         # Start the web server immediately using the generated token.
-        run_server(server_token, files_folder_path, project_dir, host="127.0.0.1", port=5000)
+        run_server(server_token, project_dir, host="127.0.0.1", port=5000)
     else:
         print(
             "You can later run the web interface by executing the generated start_server scripts (start_server.bat or start_server.sh)."

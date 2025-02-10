@@ -1,5 +1,7 @@
 import logging
+import os
 
+from pathlib import Path
 from cfg import load_config
 from data_ingestion import DataIngestionApp
 from database.setup_db import initialize_databases
@@ -12,7 +14,9 @@ def main():
 
     # Load configuration from the YAML config file and environment variable.
     try:
-        config = load_config("config.yaml")
+        current_dir = Path.cwd()
+        config_path = current_dir / "config.yaml"
+        config = load_config(config_path)
     except Exception as e:
         logging.error(f"Could not load configuration: {e}")
         return
@@ -23,7 +27,8 @@ def main():
     # Create the main application instance.
     app = DataIngestionApp(config=config)
 
-    loader = app.getUnstructuredLoader(directory_path="files")
+    files_dir = current_dir / "files"
+    loader = app.getUnstructuredLoader(directory_path=files_dir)
 
     app.register_loader(loader)
 
