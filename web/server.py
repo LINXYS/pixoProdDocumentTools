@@ -6,7 +6,7 @@ import zipfile
 
 import pyzipper
 import rarfile
-from flask import Flask, request, render_template_string, abort, send_file
+from flask import Flask, request, render_template_string, abort, send_file, stream_with_context, Response
 from werkzeug.utils import secure_filename
 from io import BytesIO
 
@@ -159,7 +159,7 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
         try:
             python_executable = sys.executable
 
-            # server.py is in pixoDocumentToolsV3/web, so the project root is one directory up.
+            # server.py is in pixoDocumentToolsV3/web, so the project root is one level up.
             web_dir = os.path.dirname(os.path.abspath(__file__))  # pixoDocumentToolsV3/web
             project_root = os.path.abspath(os.path.join(web_dir, os.pardir))  # pixoDocumentToolsV3
 
@@ -168,49 +168,46 @@ def create_app(upload_token: str, upload_folder: str, project_dir: str) -> Flask
             test_folder = app.config["PROJECT_DIR"]
             main_script_path = os.path.join(project_root, test_folder, "main.py")
 
-            # Prepare a command that will:
-            # 1. Insert the project root into sys.path.
-            # 2. Execute the contents of main.py.
-            #
-            # This ensures that the import "from cfg import load_config" (where cfg.py is in the project root)
-            # can be found.
+            # Create bootstrap code that:
+            # 1. Inserts the project root into sys.path so that imports (e.g. "from cfg import load_config") work.
+            # 2. Executes the contents of main.py.
             bootstrap_code = (
                 "import sys; "
                 "sys.path.insert(0, r'{}'); "
                 "exec(open(r'{}').read())"
             ).format(project_root, main_script_path)
 
-            cmd = [python_executable, "-c", bootstrap_code]
-
-            # (Optionally) set PYTHONPATH in the environment as well.
+            # Prepare the environment so that the project root is in PYTHONPATH (optional but can help)
             env = os.environ.copy()
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = project_root + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
 
-            result = subprocess.run(
-                cmd,
-                cwd=project_root,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            output = result.stdout
+            # Use the '-u' flag to force unbuffered output.
+            cmd = [python_executable, "-u", "-c", bootstrap_code]
 
-            output_template = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Main Script Output</title>
-            </head>
-            <body>
-                <h2>Main Script Output:</h2>
-                <pre>{{ output }}</pre>
-                <button onclick="window.location.href='/?token={{ token }}'">Back</button>
-            </body>
-            </html>
-            """
-            return render_template_string(output_template, output=output, token=upload_token)
+            def generate():
+                # Begin HTML output.
+                yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
+                # Launch the process.
+                with subprocess.Popen(
+                        cmd,
+                        cwd=project_root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                ) as proc:
+                    # Stream each line as it's available.
+                    for line in iter(proc.stdout.readline, ""):
+                        # Optionally, you can wrap or format the line.
+                        yield line
+                # End the HTML output.
+                yield "</pre><br>"
+                yield "<button onclick=\"window.location.href='/?token={}'\">Back</button>".format(upload_token)
+                yield "</body></html>"
+
+            # Return a streaming response.
+            return Response(stream_with_context(generate()), mimetype="text/html")
         except Exception as e:
             return f"Error running main script: {str(e)}", 500
 
