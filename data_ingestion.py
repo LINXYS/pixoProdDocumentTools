@@ -1,6 +1,7 @@
 import glob
 import logging
 import os
+import shutil
 from os.path import join
 from typing import List
 
@@ -61,16 +62,32 @@ class DataIngestionApp:
 
     def getUnstructuredLoader(self, directory_path: str):
         """
-        Create a new unstructured loader.
+        Create a new unstructured loader. If Tesseract is not installed,
+        image files are skipped.
         """
+        # Check if Tesseract is installed (i.e. available in PATH)
+        if shutil.which("tesseract") is None:
+            warnings.warn("Tesseract is not installed or not in PATH. All image files will be skipped.")
+            tesseract_installed = False
+        else:
+            tesseract_installed = True
 
+        # Get all files recursively in the directory
         files = glob.glob(join(directory_path, "**/*"), recursive=True)
         files = [f for f in files if os.path.isfile(f)]
+
+        # If Tesseract is not installed, filter out image files by their extensions.
+        if not tesseract_installed:
+            image_extensions = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif"}
+            files = [
+                f for f in files
+                if os.path.splitext(f)[1].lower() not in image_extensions
+            ]
 
         return UnstructuredLoader(
             file_path=files,
             chunking_strategy="basic",
-            max_characters=self.config.chunk_size*4,
-            overlap=self.config.chunk_overlap*4,
+            max_characters=self.config.chunk_size * 4,
+            overlap=self.config.chunk_overlap * 4,
             include_orig_elements=False,
         )
