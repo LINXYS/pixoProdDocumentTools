@@ -186,7 +186,7 @@ def create_schedule_scripts(project_dir, project_name, schedule_method):
             else:
                 f.write('echo "Unrecognized schedule method; scheduling command not added."\n')
         # Always run main.py using the bootstrap code.
-        f.write('python -u -c "import sys; sys.path.insert(0, r\'$PROJECT_ROOT\'); '
+        f.write('python -u -c "import sys; sys.path.insert(0, r\'$PROJECT_ROOT%\'); '
                 'exec(open(r\'$PROJECT_DIR/main.py\', encoding=\'utf-8\').read())"\n')
     os.chmod(sh_path, 0o755)
 
@@ -237,10 +237,11 @@ def main():
         "condenser": "gpt-4o-mini",
         "embeddings": "openai",
         "language": "de",
-        "schedule": "d-* h-*"
+        "schedule": "d-* h-*",
+        "simscoretreshold": 0.25
     }
 
-    not_change_keys = ['rerankertopn', 'dbtopn', 'condenser', 'schedule']
+    not_change_keys = ['rerankertopn', 'dbtopn', 'condenser', 'schedule', 'simscoretreshold']
 
     edit_config = input("Do you want to edit the chain config? (y/n): ").strip().lower() == 'y'
     if edit_config:
@@ -252,9 +253,12 @@ def main():
             if new_value:
                 try:
                     default_chain_config[key] = type(value)(new_value)
+                    if key == 'simscoretreshold':
+                        default_chain_config[key] = float(new_value)
                 except Exception as e:
                     print(f"Could not convert value for {key}: {e}. Keeping default {value}.")
 
+    print(f"Using similarity score threshold: {default_chain_config['simscoretreshold']}")
     project_response = create_project(
         api_url,
         access_token,

@@ -30,6 +30,8 @@ def main():
     files_dir = current_dir / "files"
     loader = app.getUnstructuredLoader(directory_path=files_dir)
 
+
+
     app.register_loader(loader)
 
     app.ingest_data()
