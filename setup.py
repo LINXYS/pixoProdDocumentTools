@@ -206,11 +206,17 @@ def main():
     token_response = get_access_token(api_url, username, password)
     while token_response.get('connection_error'):
         print("\nThe current API URL appears to be unreachable.")
-        api_url = input("Enter a new API URL: ").strip()
+        api_url = input("Enter a new API URL (or press Enter to keep the current one): ").strip() or api_url
         save_api_url(api_url)
         token_response = get_access_token(api_url, username, password)
 
-    if 'error' in token_response:
+    while 'error' in token_response and token_response.get('status_code') == 400:
+        print("\nLogin failed. Please check your credentials.")
+        username = input("Enter your username: ").strip()
+        password = input("Enter your password: ").strip()
+        token_response = get_access_token(api_url, username, password)
+
+    if 'error' in token_response and token_response.get('status_code') != 400:
         print(f"Error: {token_response['error']}")
         return
 
