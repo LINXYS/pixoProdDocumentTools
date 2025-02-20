@@ -228,9 +228,41 @@ def main():
     # --- Project Setup ---
     project_name = input("Enter the project name: ").strip()
     store_conversations = True
-    prompt_or_template = input(
-        "Enter prompt or template (default: ___TEMPLATE___:standard_restrictive_prompt_english): "
-    ).strip() or "___TEMPLATE___:standard_restrictive_prompt_english"
+    
+    print("\nSelect a prompt template:")
+    print("1. English template")
+    print("2. German template")
+    print("3. Custom prompt")
+    
+    prompt_choice = input("Enter your choice (1, 2, or 3): ").strip()
+    
+    if prompt_choice == "1":
+        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
+    elif prompt_choice == "2":
+        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_german"
+    elif prompt_choice == "3":
+        print("\nSample prompt:")
+        print('''
+"Du bist ein hilfreicher, respektvoller und ehrlicher Assistent. Antworte immer so hilfreich wie möglich und verwende dabei den gegebenen Kontext- Text. Deine Antworten sollen nur die gestellten Fragen beantworten und keinen weiteren Text darüber hinaus beinhalten nachdem die Antwort fertig ist.
+Wenn eine Frage keinen Sinn macht oder auf falschen Fakten beruht, erkläre warum und gib keine falschen Antworten. Wenn du die Antwort nicht weißt, teile keine falschen Informationen.
+Gegeben wird auch der gesamte vorherige Chat- Verlauf, den du bereits geführt hast.
+
+Kontext:
+{context}
+
+##############
+
+You are a helpful, respectful, and honest assistant. Always respond as helpfully as possible using the given context. Your answers should only address the asked questions and should not include any additional text beyond the answer once it is complete.
+If a question does not make sense or is based on false facts, explain why and do not provide incorrect answers. If you do not know the answer, do not share false information.
+Also provided is the entire previous chat history that you have already conducted.
+
+Context:
+{context}
+''')
+        prompt_or_template = input("\nEnter your custom prompt: ").strip()
+    else:
+        print("Invalid choice. Using the default English template.")
+        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
 
     default_chain_config = {
         "generator": "gpt-4o-mini",

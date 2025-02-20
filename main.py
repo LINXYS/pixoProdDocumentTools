@@ -28,7 +28,7 @@ def main():
     app = DataIngestionApp(config=config)
 
     files_dir = current_dir / "files"
-    loader = app.getUnstructuredLoader(directory_path=files_dir)
+    loader = app.get_unstructured_loader(directory_path=files_dir)
 
 
 
