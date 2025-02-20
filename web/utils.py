@@ -61,16 +61,12 @@ def run_script(project_directory, upload_token):
                     env=environment,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
                     bufsize=0,
                     shell=True
             )
-            while True:
-                character = process.stdout.read(1)
-                if not character and process.poll() is not None:
-                    break
-                if character:
-                    yield character
+            for line in process.stdout:
+                yield line.decode('utf-8')
+            process.wait()
             yield "</pre>\n"
             yield f"<button onclick=\"window.location.href='/?token={upload_token}'\">Back</button>\n"
             yield "</body></html>\n"

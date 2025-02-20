@@ -2,6 +2,7 @@ import glob
 import logging
 import os
 import shutil
+import sys
 import warnings
 import json
 from os.path import join
@@ -26,6 +27,7 @@ class DataIngestionApp:
         self.config = config
         self.indexer = LangChainIndexer(config)
         self.loaders: List[BaseLoader] = []
+        self.disable_bar = True
 
     def register_loader(self, loader: BaseLoader):
         """
@@ -54,7 +56,11 @@ class DataIngestionApp:
         files_dir = Path.cwd() / "files"
 
         pixodoc_files = glob.glob(join(files_dir, "**/*.pixodoc"), recursive=True)
-        for file in tqdm(pixodoc_files, desc="Processing .pixodoc files", unit="file"):
+
+        if self.disable_bar:
+            print(f"Processing {len(pixodoc_files)} .pixodoc files...")
+
+        for file in tqdm(pixodoc_files, desc="Processing .pixodoc files", unit="file", disable=self.disable_bar, file=sys.stdout):
             try:
                 with open(file, 'r', encoding='utf-8') as f:
                     doc_data = json.load(f)
@@ -94,9 +100,10 @@ class DataIngestionApp:
             except Exception as e:
                 logging.error(f"Failed to process file {file}: {str(e)}")
         logging.info(f"Loaded {len(pixodoc_files)} .pixodoc files.")
-
+        print()
+        logging.info("Starting ingestion... Processing loaders.")
         # Iterate over loaders with a progress bar.
-        for loader in tqdm(self.loaders, desc="Processing loaders", unit="loader"):
+        for loader in tqdm(self.loaders, desc="Processing loaders", unit="loader", disable=self.disable_bar, file=sys.stdout):
             if self.config.use_chunking:
                 docs = loader.load_and_split(text_splitter=self.get_text_splitter())
                 logging.info(f"Loader {loader.__class__.__name__} provided {len(docs)} chunked documents.")
@@ -108,6 +115,8 @@ class DataIngestionApp:
             self.indexer.index_documents(all_documents, cleanup_mode=cleanup_mode)
         else:
             logging.info("No documents to index.")
+        print()
+        logging.info("Ingestion complete.")
 
     def get_unstructured_loader(self, directory_path: str):
         """
@@ -145,4 +154,5 @@ class DataIngestionApp:
             max_characters=self.config.chunk_size * 4,
             overlap=self.config.chunk_overlap * 4,
             include_orig_elements=False,
+            show_progress=not self.disable_bar
         )
