@@ -23,11 +23,13 @@ class DataIngestionApp:
     """
     Ties together document loaders, optional chunking, and indexing via LangChain.
     """
-    def __init__(self, config: IngestionConfig):
+    def __init__(self, config: IngestionConfig, chunking_enabled: bool = True):
         self.config = config
         self.indexer = LangChainIndexer(config)
         self.loaders: List[BaseLoader] = []
         self.disable_bar = True
+        if not chunking_enabled:
+            self.config.chunk_size = 10000000000000
 
     def register_loader(self, loader: BaseLoader):
         """

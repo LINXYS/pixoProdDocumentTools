@@ -5,10 +5,11 @@ from langchain.schema import Document
 from bs4 import BeautifulSoup
 import requests
 from fake_useragent import UserAgent
-from urllib.parse import urlparse
 
 from markdownify import markdownify
 from tqdm import tqdm
+
+from utils import save_document
 
 
 class BitrixDocProcessor:
@@ -23,7 +24,7 @@ class BitrixDocProcessor:
             content, title = self._fetch_content(link)
             if content and title:
                 doc = self._create_document(content, link, title)
-                self._save_document(doc)
+                save_document(doc)
 
     def _read_links(self) -> List[str]:
         with open(self.links_file, 'r') as file:
@@ -64,21 +65,6 @@ class BitrixDocProcessor:
         lines = text.split('\n')
         cleaned_lines = [line for line in lines if not any(pattern in line for pattern in unwanted_patterns)]
         return '\n'.join(cleaned_lines).strip()
-
-    def _save_document(self, doc: Document):
-        filename = self._generate_filename(doc.metadata['source'])
-        filepath = os.path.join(self.output_folder, f"{filename}.pixodoc")
-
-        with open(filepath, 'w', encoding='utf-8') as file:
-            json.dump({
-                "page_content": doc.page_content,
-                "metadata": doc.metadata
-            }, file, ensure_ascii=False, indent=2)
-
-    def _generate_filename(self, url: str) -> str:
-        parsed_url = urlparse(url)
-        path = parsed_url.path.strip('/')
-        return '_'.join(path.split('/')[-2:])
 
 
 if __name__ == "__main__":

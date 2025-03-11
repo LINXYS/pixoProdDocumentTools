@@ -51,7 +51,7 @@ def get_access_token(url, username, password):
         return {'error': 'Failed to retrieve token', 'status_code': response.status_code}
 
 
-def create_project(url, token, project_name, store_conversations, prompt_or_template, chaincfg):
+def create_project(url, token, project_name, store_conversations, prompt_or_template, chaincfg, image=None):
     headers = {
         'Authorization': f'Bearer {token}',
         'Content-Type': 'application/json'
@@ -62,6 +62,9 @@ def create_project(url, token, project_name, store_conversations, prompt_or_temp
         "store_conversations": store_conversations,
         "prompt_or_template": prompt_or_template
     }
+    # Add the image parameter only if it is provided (non empty)
+    if image and image.strip():
+        query_params["image"] = image.strip()
     create_project_url = url.rstrip("/") + "/createproject"
     print(f"\nCreating project via: {create_project_url}")
     print("Query Parameters:", query_params)
@@ -241,6 +244,24 @@ def main():
     elif prompt_choice == "2":
         prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_german"
     elif prompt_choice == "3":
+        print("\n")
+
+        print('''Du bist ein hilfreicher, respektvoller und ehrlicher Assistent. Antworte immer so hilfreich wie möglich und verwende dabei den gegebenen Kontext- Text. Deine Antworten sollen nur die gestellten Fragen beantworten und keinen weiteren Text darüber hinaus beinhalten nachdem die Antwort fertig ist.
+Wenn eine Frage keinen Sinn macht oder auf falschen Fakten beruht, erkläre warum und gib keine falschen Antworten. Wenn du die Antwort nicht weißt, teile keine falschen Informationen.
+Gegeben wird auch der gesamte vorherige Chat- Verlauf, den du bereits geführt hast.
+
+Kontext:
+{context}
+
+##################
+
+You are a helpful, respectful, and honest assistant. Always respond as helpfully as possible using the given context. Your answers should only address the asked questions and should not include any additional text beyond the answer once it is complete.
+If a question does not make sense or is based on false facts, explain why and do not provide incorrect answers. If you do not know the answer, do not share false information.
+Also provided is the entire previous chat history that you have already conducted.
+
+Context:
+{context}''')
+
         print("\nEnter your custom prompt (press Enter twice to finish):")
         custom_prompt_lines = []
         while True:
@@ -291,6 +312,14 @@ def main():
                 except Exception as e:
                     print(f"Could not convert value for {key}: {e}. Keeping default {value}.")
 
+    # Prompt for image URL
+    image_url = input("Optional: Enter an image URL (leave blank if none; for image hosting, you may use https://postimages.org/): ").strip()
+    if image_url:
+        while not (image_url.startswith("http://") or image_url.startswith("https://")):
+            print("Invalid URL format. Please provide a valid URL starting with 'http://' or 'https://'.")
+            print("For image hosting, consider https://postimages.org/")
+            image_url = input("Optional: Enter an image URL (or leave blank): ").strip()
+    
     print(f"Using similarity score threshold: {default_chain_config['simscoretreshold']}")
     project_response = create_project(
         api_url,
@@ -298,7 +327,8 @@ def main():
         project_name,
         store_conversations,
         prompt_or_template,
-        default_chain_config
+        default_chain_config,
+        image=image_url
     )
     if 'error' in project_response:
         print(f"Error: {project_response['error']}")

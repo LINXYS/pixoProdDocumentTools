@@ -25,7 +25,7 @@ def main():
     initialize_databases(config)
 
     # Create the main application instance.
-    app = DataIngestionApp(config=config)
+    app = DataIngestionApp(config=config, chunking_enabled=True)
 
     files_dir = current_dir / "files"
     loader = app.get_unstructured_loader(directory_path=files_dir)
