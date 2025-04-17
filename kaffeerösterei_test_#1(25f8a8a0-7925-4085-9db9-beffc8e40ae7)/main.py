@@ -41,7 +41,7 @@ def main():
         logging.error("KRB_URL environment variable is not set to the utl of the xml files.")
         return
 
-    loader = krb_xml_loader.KRBXmLLoader(url=krb_url)
+    loader = krb_xml_loader.KRBXMLLoader(url=krb_url)
 
     app.register_loader(loader)
 
