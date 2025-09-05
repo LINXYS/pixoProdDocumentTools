@@ -26,7 +26,7 @@ class LangChainIndexer:
 
         # Instantiate the embeddings provider.
         if config.embedding_provider.lower() == "openai":
-            embedding = OpenAIEmbeddings()
+            embedding = OpenAIEmbeddings(model="text-embedding-3-large")
         elif config.embedding_provider.lower() == "huggingface":
             embedding = HuggingFaceEmbeddings()
         else:

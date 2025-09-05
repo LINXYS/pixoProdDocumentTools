@@ -281,14 +281,14 @@ Context:
         prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
 
     default_chain_config = {
-        "generator": "gpt-4o-mini",
+        "generator": "gpt-o3mini",
         "temperature": 0.1,
         "chunksize": 1000,
         "chunkoverlap": 100,
         "rerank": "cohere",
         "rerankertopn": 10,
         "dbtopn": 25,
-        "condenser": "gpt-4o-mini",
+        "condenser": "gpt4o",
         "embeddings": "openai",
         "language": "de",
         "schedule": "d-* h-*",
