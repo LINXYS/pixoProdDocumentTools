@@ -1,91 +1,11 @@
 import os
 import shutil
-import requests
 import yaml
 from dotenv import load_dotenv
 import secrets
 
 from web.server import run_server
-
-# (Assuming the above server code is in web/server.py)
-# from web.server import run_server
-
-API_URL_FILE = "api_url.txt"
-
-
-def load_api_url():
-    """Load the saved API URL from a local file, if it exists."""
-    if os.path.exists(API_URL_FILE):
-        with open(API_URL_FILE, 'r', encoding='utf-8') as f:
-            url = f.read().strip()
-            if url:
-                print("Using saved API URL:", url)
-                return url
-    return None
-
-
-def save_api_url(url):
-    """Save the API URL to a local file."""
-    with open(API_URL_FILE, 'w', encoding='utf-8') as f:
-        f.write(url)
-    print("Saved new API URL:", url)
-
-
-def get_access_token(url, username, password):
-    payload = {'username': username, 'password': password}
-    login_url = url.rstrip("/") + "/auth/jwt/login"
-    print(f"\nRequesting token from: {login_url} (username: {username})")
-    try:
-        response = requests.post(login_url, data=payload)
-    except requests.exceptions.RequestException as e:
-        print("Connection error during token request:", e)
-        return {'error': 'Connection error during token retrieval', 'connection_error': True}
-
-    if response.status_code == 200:
-        print("Token retrieved successfully.")
-        return response.json()
-    else:
-        print(f"Failed to retrieve token. URL: {response.url}")
-        print("Status Code:", response.status_code)
-        print("Response Content:", response.text)
-        return {'error': 'Failed to retrieve token', 'status_code': response.status_code}
-
-
-def create_project(url, token, project_name, store_conversations, prompt_or_template, chaincfg, image=None):
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    # API expects some parameters as query parameters and the chain config as the JSON body.
-    query_params = {
-        "project_name": project_name,
-        "store_conversations": store_conversations,
-        "prompt_or_template": prompt_or_template
-    }
-    # Add the image parameter only if it is provided (non empty)
-    if image and image.strip():
-        query_params["image"] = image.strip()
-    create_project_url = url.rstrip("/") + "/createproject"
-    print(f"\nCreating project via: {create_project_url}")
-    print("Query Parameters:", query_params)
-    print("Chain configuration (request body):", chaincfg)
-
-    try:
-        response = requests.post(create_project_url, params=query_params, json=chaincfg, headers=headers)
-    except requests.exceptions.RequestException as e:
-        print("Exception occurred during project creation:", e)
-        return {'error': 'Exception during project creation'}
-
-    if response.status_code == 200:
-        print("Project created successfully. Response:")
-        print(response.json())
-        return response.json()
-    else:
-        print("\nFailed to create project.")
-        print("Request URL:", response.url)
-        print("Status Code:", response.status_code)
-        print("Response Content:", response.text)
-        return {'error': 'Failed to create project', 'status_code': response.status_code}
+from cfg import DEFAULT_CONFIG, SUPPORTED_EMBEDDING_PROVIDERS, SUPPORTED_LLM_PROVIDERS, SUPPORTED_EMBEDDING_MODELS
 
 
 def create_schedule_scripts(project_dir, project_name, schedule_method):
@@ -197,157 +117,12 @@ def create_schedule_scripts(project_dir, project_name, schedule_method):
 def main():
     load_dotenv()
 
-    # --- API URL handling ---
-    api_url = load_api_url()
-    if not api_url:
-        api_url = input("Enter the API URL: ").strip()
-        save_api_url(api_url)
-
-    username = os.getenv("PIXO_USERNAME") or input("Enter your username: ").strip()
-    password = os.getenv("PIXO_PASSWORD") or input("Enter your password: ").strip()
-
-    token_response = get_access_token(api_url, username, password)
-    while token_response.get('connection_error'):
-        print("\nThe current API URL appears to be unreachable.")
-        api_url = input("Enter a new API URL (or press Enter to keep the current one): ").strip() or api_url
-        save_api_url(api_url)
-        token_response = get_access_token(api_url, username, password)
-
-    while 'error' in token_response and token_response.get('status_code') == 400:
-        print("\nLogin failed. Please check your credentials.")
-        username = input("Enter your username: ").strip()
-        password = input("Enter your password: ").strip()
-        token_response = get_access_token(api_url, username, password)
-
-    if 'error' in token_response and token_response.get('status_code') != 400:
-        print(f"Error: {token_response['error']}")
-        return
-
-    access_token = token_response.get('access_token')
-    if not access_token:
-        print("Error: No access token found in the response.")
-        return
-
     # --- Project Setup ---
-    project_name = input("Enter the project name: ").strip()
-    store_conversations = True
-    
-    print("\nSelect a prompt template:")
-    print("1. English template")
-    print("2. German template")
-    print("3. Custom prompt")
-    
-    prompt_choice = input("Enter your choice (1, 2, or 3): ").strip()
-    
-    if prompt_choice == "1":
-        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
-    elif prompt_choice == "2":
-        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_german"
-    elif prompt_choice == "3":
-        print("\n")
-
-        print('''Du bist ein hilfreicher, respektvoller und ehrlicher Assistent. Antworte immer so hilfreich wie möglich und verwende dabei den gegebenen Kontext- Text. Deine Antworten sollen nur die gestellten Fragen beantworten und keinen weiteren Text darüber hinaus beinhalten nachdem die Antwort fertig ist.
-Wenn eine Frage keinen Sinn macht oder auf falschen Fakten beruht, erkläre warum und gib keine falschen Antworten. Wenn du die Antwort nicht weißt, teile keine falschen Informationen.
-Gegeben wird auch der gesamte vorherige Chat- Verlauf, den du bereits geführt hast.
-
-Kontext:
-{context}
-
-##################
-
-You are a helpful, respectful, and honest assistant. Always respond as helpfully as possible using the given context. Your answers should only address the asked questions and should not include any additional text beyond the answer once it is complete.
-If a question does not make sense or is based on false facts, explain why and do not provide incorrect answers. If you do not know the answer, do not share false information.
-Also provided is the entire previous chat history that you have already conducted.
-
-Context:
-{context}''')
-
-        print("\nEnter your custom prompt (press Enter twice to finish):")
-        custom_prompt_lines = []
-        while True:
-            line = input()
-            if line.strip() == "":
-                if custom_prompt_lines and custom_prompt_lines[-1].strip() == "":
-                    break
-            custom_prompt_lines.append(line)
-        
-        prompt_or_template = "\n".join(custom_prompt_lines).strip()
-        
-        if not prompt_or_template:
-            print("No custom prompt entered. Using the default English template.")
-            prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
-    else:
-        print("Invalid choice. Using the default English template.")
-        prompt_or_template = "___TEMPLATE___:standard_restrictive_prompt_english"
-
-    default_chain_config = {
-        "generator": "gpt-o3mini",
-        "temperature": 0.1,
-        "chunksize": 1000,
-        "chunkoverlap": 100,
-        "rerank": "cohere",
-        "rerankertopn": 10,
-        "dbtopn": 25,
-        "condenser": "gpt4o",
-        "embeddings": "openai",
-        "language": "de",
-        "schedule": "d-* h-*",
-        "simscoretreshold": 0.25
-    }
-
-    not_change_keys = ['rerankertopn', 'dbtopn', 'condenser', 'schedule', 'simscoretreshold']
-
-    edit_config = input("Do you want to edit the chain config? (y/n): ").strip().lower() == 'y'
-    if edit_config:
-        print("Enter new values for chain config (press Enter to keep default):")
-        for key, value in default_chain_config.items():
-            if key in not_change_keys:
-                continue
-            new_value = input(f"{key} ({value}): ").strip()
-            if new_value:
-                try:
-                    default_chain_config[key] = type(value)(new_value)
-                    if key == 'simscoretreshold':
-                        default_chain_config[key] = float(new_value)
-                except Exception as e:
-                    print(f"Could not convert value for {key}: {e}. Keeping default {value}.")
-
-    # Prompt for image URL
-    image_url = input("Optional: Enter an image URL (leave blank if none; for image hosting, you may use https://postimages.org/): ").strip()
-    if image_url:
-        while not (image_url.startswith("http://") or image_url.startswith("https://")):
-            print("Invalid URL format. Please provide a valid URL starting with 'http://' or 'https://'.")
-            print("For image hosting, consider https://postimages.org/")
-            image_url = input("Optional: Enter an image URL (or leave blank): ").strip()
-    
-    print(f"Using similarity score threshold: {default_chain_config['simscoretreshold']}")
-    project_response = create_project(
-        api_url,
-        access_token,
-        project_name,
-        store_conversations,
-        prompt_or_template,
-        default_chain_config,
-        image=image_url
-    )
-    if 'error' in project_response:
-        print(f"Error: {project_response['error']}")
-        return
-
-    print("Project created successfully!")
-    project_id = project_response.get('project_id')
-    if not project_id:
-        print("Warning: No project ID returned.")
-
-    # Ask for scheduling method (optional)
-    print("\nScheduling method options:\n  - hourly\n  - daily\n  - once\n  - (leave blank to skip scheduling)\n")
-    schedule_method = input("Enter scheduling method: ").strip().lower()
+    project_name = os.path.basename(os.getcwd())
+    schedule_method = ""  # Do not schedule automatically; just generate scripts.
 
     # --- Create Project Directory ---
-    if project_id:
-        project_dir = f"{project_name.replace(' ', '_').lower()}({project_id})"
-    else:
-        project_dir = project_name.replace(" ", "_").lower()
+    project_dir = project_name.replace(" ", "_").lower()
 
     os.makedirs(project_dir, exist_ok=True)
 
@@ -361,17 +136,46 @@ Context:
         print(f"Error copying main.py: {e}")
         return
 
+    # Do not prompt for or create .env. Use the existing .env in current directory (already loaded by load_dotenv()).
+    # Validate presence of required env vars to fail fast.
+    if not os.getenv("DATABASE_URL") or not os.getenv("RECORD_MANAGER_DATABASE_URL"):
+        print("Error: DATABASE_URL and/or RECORD_MANAGER_DATABASE_URL not found in the current directory's .env.")
+        return
+
+    # --- Interactive YAML Config prompts using centralized defaults ---
+    # Start with centralized defaults
+    config = dict(DEFAULT_CONFIG)
+    # Suggest collection_name as the project directory by default
+    config["collection_name"] = project_dir
+
+    # Helper to get int with default
+    def prompt_int(_prompt, default_val):
+        return default_val
+
+    # Helper to get bool with default
+    def prompt_bool(_prompt, default_val):
+        return default_val
+
+    # chunking
+    config["chunk_size"] = prompt_int("Chunk size (characters)", config["chunk_size"])
+    config["chunk_overlap"] = prompt_int("Chunk overlap (characters)", config["chunk_overlap"])
+    config["use_chunking"] = prompt_bool("Enable chunking", config["use_chunking"])
+
+    # embedding provider
+    # Keep defaults; no prompts.
+    provider = config["embedding_provider"]
+
+    # vector size
+    # Leave as default/auto; no prompts.
+    config["vector_size"] = DEFAULT_CONFIG["vector_size"]
+
+    # llm provider
+    # Keep default without prompting.
+
+    # collection name
+    # Keep default based on project_dir.
+
     # --- Write YAML Config File ---
-    config = {
-        "chunk_overlap": 200,            # Example updated value
-        "chunk_size": 1000,
-        "embedding_provider": "openai",
-        # Default to OpenAI text-embedding-3-large, leave vector_size empty so cfg resolves defaults.
-        "embedding_model": "text-embedding-3-large",
-        "vector_size": None,
-        "project_id": project_id or "documents",  # Use the project ID or a default value
-        "use_chunking": True
-    }
     config_path = os.path.join(project_dir, 'config.yaml')
     try:
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -442,6 +246,7 @@ Context:
     print(f"\nSetup complete! Files have been created in '{project_dir}':\n")
     print("  - main.py (ingestion script)")
     print("  - config.yaml (YAML config)")
+    print("  - .env (environment variables: DATABASE_URL, RECORD_MANAGER_DATABASE_URL)")
     print("  - schedule_ingestion.bat (Windows scheduling or execution script)")
     print("  - schedule_ingestion.sh  (Unix-like scheduling or execution script)")
     print("  - start_server.bat and start_server.sh (to start the file upload web interface)")
@@ -455,16 +260,7 @@ Context:
         print("No scheduling method was selected; the scheduling scripts will simply execute main.py when run.")
 
     # --- Offer to run the Web Interface Immediately ---
-    run_web = input(
-        "\nDo you want to start the web interface for file uploads and starting the process now? (y/n): "
-    ).strip().lower()
-    if run_web == 'y':
-        # Start the web server immediately using the generated token.
-        run_server(server_token, project_dir, host="127.0.0.1", port=5000)
-    else:
-        print(
-            "You can later run the web interface by executing the generated start_server scripts (start_server.bat or start_server.sh)."
-        )
+    print("To start the web interface later, run the generated start_server script (start_server.bat or start_server.sh).")
 
 
 if __name__ == "__main__":

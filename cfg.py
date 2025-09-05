@@ -4,6 +4,31 @@ import sys
 import yaml
 from dotenv import load_dotenv
 
+# Centralized supported options and defaults (single source of truth)
+SUPPORTED_EMBEDDING_PROVIDERS = ["openai", "azure_openai", "ollama", "google"]
+SUPPORTED_LLM_PROVIDERS = ["openai", "anthropic", "google", "azure_openai", "groq", "ollama"]
+SUPPORTED_EMBEDDING_MODELS = {
+    "openai": ["text-embedding-3-large", "text-embedding-3-small", "text-embedding-ada-002"]
+    # Other providers can be added here as needed
+}
+OPENAI_DEFAULT_VECTOR_SIZES = {
+    "text-embedding-3-large": 3072,
+    "text-embedding-3-small": 1536,
+    "text-embedding-ada-002": 1536,
+}
+
+# Single default config (used by both cfg.py and setup.py)
+DEFAULT_CONFIG = {
+    "chunk_size": 1000,
+    "chunk_overlap": 200,
+    "use_chunking": True,
+    "embedding_provider": "openai",
+    "embedding_model": "text-embedding-3-large",
+    "vector_size": None,  # None => auto-resolve for OpenAI in load_config
+    "llm_provider": "openai",
+    "collection_name": "documents",
+}
+
 class IngestionConfig:
     """
     Configuration for data ingestion.
@@ -68,18 +93,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
 
     # Check if the config file exists; if not, create it with default values.
     if not os.path.exists(config_file_path):
-        default_config = {
-            "chunk_size": 1000,
-            "chunk_overlap": 200,
-            "use_chunking": True,
-            "embedding_provider": "openai",
-            # Defaults for embedding configuration
-            "embedding_model": "text-embedding-3-large",
-            "vector_size": None,
-            "llm_provider": "openai",
-            # Allow both "collection_name" and "project_id" as keys for compatibility.
-            "collection_name": "documents",
-        }
+        # Start from centralized DEFAULT_CONFIG
+        default_config = dict(DEFAULT_CONFIG)
         with open(config_file_path, "w", encoding="utf-8") as f:
             yaml.dump(default_config, f)
         logging.info(f"Default configuration file '{config_file_path}' created.")
@@ -92,27 +107,23 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         raise
 
     # Get chunking and embedding settings from the YAML file.
-    chunk_size = config_data.get("chunk_size", 1000)
-    chunk_overlap = config_data.get("chunk_overlap", 200)
-    use_chunking = config_data.get("use_chunking", True)
-    embedding_provider = config_data.get("embedding_provider", "openai")
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update(config_data or {})
+
+    chunk_size = cfg.get("chunk_size", DEFAULT_CONFIG["chunk_size"])
+    chunk_overlap = cfg.get("chunk_overlap", DEFAULT_CONFIG["chunk_overlap"])
+    use_chunking = cfg.get("use_chunking", DEFAULT_CONFIG["use_chunking"])
+    embedding_provider = cfg.get("embedding_provider", DEFAULT_CONFIG["embedding_provider"])
     # Read embedding model and vector size (support a couple synonyms)
-    embedding_model = config_data.get(
-        "embedding_model",
-        "text-embedding-3-large"
-    )
-    vector_size = config_data.get(
-        "vector_size",
-        config_data.get("embedding_dimensions", None)
-    )
+    embedding_model = cfg.get("embedding_model", DEFAULT_CONFIG["embedding_model"])
+    vector_size = cfg.get("vector_size", cfg.get("embedding_dimensions", DEFAULT_CONFIG["vector_size"]))
     # Resolve OpenAI default vector sizes if not provided
     if embedding_provider and embedding_provider.lower() == "openai":
-        defaults = {"text-embedding-3-large": 3072, "text-embedding-3-small": 1536, "text-embedding-ada-002": 1536}
         if vector_size in (None, "", 0):
-            vector_size = defaults.get(embedding_model, 1536)
-    llm_provider = config_data.get("llm_provider", "openai")
+            vector_size = OPENAI_DEFAULT_VECTOR_SIZES.get(embedding_model, 1536)
+    llm_provider = cfg.get("llm_provider", DEFAULT_CONFIG["llm_provider"])
     # Try to load the collection name from "collection_name" key; if not found, check "project_id".
-    collection_name = config_data.get("collection_name", config_data.get("project_id", "documents"))
+    collection_name = cfg.get("collection_name", cfg.get("project_id", DEFAULT_CONFIG["collection_name"]))
 
     print("Loaded collection_name:", collection_name)
 
@@ -141,8 +152,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     )
     # Warn if an explicit vector_size disagrees with known defaults (OpenAI only)
     if embedding_provider.lower() == "openai":
-        known = {"text-embedding-3-large": 3072, "text-embedding-3-small": 1536, "text-embedding-ada-002": 1536}
-        expected = known.get(embedding_model)
+        expected = OPENAI_DEFAULT_VECTOR_SIZES.get(embedding_model)
         if expected and config.vector_size and config.vector_size != expected:
             logging.warning(f"Configured vector_size={config.vector_size} differs from OpenAI default for {embedding_model} ({expected}). Proceeding with configured value.")
     logging.info(f"Configuration loaded: {config}")
