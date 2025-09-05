@@ -1,10 +1,13 @@
 import os
+import pty
 import subprocess
 import platform
 from io import BytesIO
 import pyzipper
 import rarfile
-from flask import stream_with_context
+import select
+from flask import stream_with_context, Response
+
 
 def extract_archive(archive_file, destination, archive_type, zip_password):
     try:
@@ -39,38 +42,115 @@ def run_script(project_directory, upload_token):
         test_folder = project_directory
 
         if platform.system() == "Windows":
+            # Windows: regular pipe streaming works fine
             script_name = "schedule_ingestion.bat"
             script_path = os.path.join(project_root, test_folder, script_name)
-            command = f'cmd /c ""{script_path}""'
-        else:
-            script_name = "schedule_ingestion.sh"
-            script_path = os.path.join(project_root, test_folder, script_name)
-            command = f'/bin/bash "{script_path}"'
+            cmd = ["cmd", "/c", script_path]
 
-        print("Running script:", script_path)
-
-        environment = os.environ.copy()
-        process = None
-
-        def generate():
-            yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
-            nonlocal process
-            process = subprocess.Popen(
-                    command,
+            def generate_win():
+                yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
+                env = os.environ.copy()
+                # text=True + bufsize=1 => line-buffered in Python when stdout is a pipe
+                with subprocess.Popen(
+                    cmd,
                     cwd=os.path.dirname(script_path),
-                    env=environment,
+                    env=env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    bufsize=0,
-                    shell=True
+                    text=True,
+                    bufsize=1,
+                ) as proc:
+                    for line in proc.stdout:
+                        yield line
+                    proc.wait()
+                yield "</pre>\n"
+                yield f"<button onclick=\"window.location.href='/?token={upload_token}'\">Back</button>\n"
+                yield "</body></html>\n"
+
+            return Response(
+                stream_with_context(generate_win()),
+                mimetype="text/html",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
-            for line in process.stdout:
-                yield line.decode('utf-8')
-            process.wait()
+
+        # POSIX (Linux/macOS): run under a PTY to force line-buffering in the child
+        script_name = "schedule_ingestion.sh"
+        script_path = os.path.join(project_root, test_folder, script_name)
+        cmd = ["/bin/bash", script_path]
+
+        def generate_posix():
+            yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
+            env = os.environ.copy()
+            # Helps if the called script runs Python children
+            env.setdefault("PYTHONUNBUFFERED", "1")
+
+            master_fd, slave_fd = pty.openpty()
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=os.path.dirname(script_path),
+                    env=env,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True,
+                )
+            finally:
+                # Parent should only read from master
+                try:
+                    os.close(slave_fd)
+                except Exception:
+                    pass
+
+            try:
+                # Read incrementally without blocking
+                while True:
+                    r, _, _ = select.select([master_fd], [], [], 0.1)
+                    if master_fd in r:
+                        try:
+                            chunk = os.read(master_fd, 4096)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        yield chunk.decode("utf-8", errors="replace")
+                    # If the process exited, drain remaining bytes and break
+                    if proc.poll() is not None:
+                        # Drain anything left
+                        while True:
+                            try:
+                                chunk = os.read(master_fd, 4096)
+                                if not chunk:
+                                    break
+                                yield chunk.decode("utf-8", errors="replace")
+                            except OSError:
+                                break
+                        break
+            finally:
+                try:
+                    os.close(master_fd)
+                except Exception:
+                    pass
+                # Ensure process is reaped
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+
             yield "</pre>\n"
             yield f"<button onclick=\"window.location.href='/?token={upload_token}'\">Back</button>\n"
             yield "</body></html>\n"
 
-        return stream_with_context(generate())
+        # Return a streaming response and tell common proxies not to buffer it
+        return Response(
+            stream_with_context(generate_posix()),
+            mimetype="text/html",
+            headers={
+                "Cache-Control": "no-cache",
+                # Nginx honors this to disable per-request proxy buffering
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     except Exception as exception:
         return f"Error running schedule_ingestion script: {str(exception)}", 500

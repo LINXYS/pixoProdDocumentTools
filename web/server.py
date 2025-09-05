@@ -3,7 +3,7 @@ import time
 import requests
 from .app_factory import create_app
 
-TIME_LIMIT = 3600  # Server will automatically terminate after 1 hour
+TIME_LIMIT = 3600*6  # Server will automatically terminate after 6 hours
 
 def run_server(upload_token: str, project_dir: str, host="127.0.0.1", port=5000):
     """
