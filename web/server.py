@@ -12,6 +12,7 @@ def run_server(upload_token: str, project_dir: str, host="127.0.0.1", port=5000)
     """
     app = create_app(upload_token, project_dir)
     print(f"Starting web interface on http://{host}:{port}?token={upload_token}")
+    print(f"Try opening in your browser on http://dev.pixoai.ch:5001?token={upload_token}")
     print("Press Ctrl+C to stop the server.")
 
     def shutdown_after_timeout():
