@@ -431,7 +431,7 @@ Context:
     source venv/bin/activate
 
     # Run the server, passing the required parameters
-    python -c "from web.server import run_server; run_server('{server_token}', '.')"
+    python -c "from web.server import run_server; run_server('{server_token}', '{project_dir}')"
     """)
     os.chmod(sh_server_path, 0o755)
     print(f"Created {sh_server_path}")
