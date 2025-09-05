@@ -366,6 +366,9 @@ Context:
         "chunk_overlap": 200,            # Example updated value
         "chunk_size": 1000,
         "embedding_provider": "openai",
+        # Default to OpenAI text-embedding-3-large, leave vector_size empty so cfg resolves defaults.
+        "embedding_model": "text-embedding-3-large",
+        "vector_size": None,
         "project_id": project_id or "documents",  # Use the project ID or a default value
         "use_chunking": True
     }
