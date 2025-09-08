@@ -8,29 +8,41 @@ from flask import stream_with_context, Response
 
 
 def extract_archive(archive_file, destination, archive_type, zip_password):
+    def _pwd_bytes(p):
+        if p is None:
+            return None
+        return p if isinstance(p, (bytes, bytearray)) else str(p).encode("utf-8")
+
+    def _pwd_str(p):
+        if p is None:
+            return None
+        return p.decode("utf-8", errors="ignore") if isinstance(p, (bytes, bytearray)) else str(p)
+
+    os.makedirs(destination, exist_ok=True)
+
     try:
-        if archive_type == 'zip':
+        if archive_type == "zip":
             archive_data = BytesIO(archive_file.read())
-            with pyzipper.AESZipFile(archive_data) as zip_file:
-                names = zip_file.namelist()
-                if names and any(n.startswith('__MACOSX') for n in names):
+            with pyzipper.AESZipFile(archive_data) as zf:
+                names = zf.namelist()
+                if names and any(n.startswith("__MACOSX") for n in names):
                     return False, "MacOS hidden files detected. Skipping extraction."
                 try:
-                    # pyzipper expects bytes for the password
-                    zip_file.pwd = zip_password.encode('utf-8') if zip_password else None
-                    zip_file.extractall(path=destination)
+                    pwd = _pwd_bytes(zip_password)
+                    if pwd:
+                        zf.setpassword(pwd)
+                    zf.extractall(path=destination)
                 except RuntimeError:
-                    return False, "Incorrect password for zip file. File deleted."
+                    return False, "Incorrect password for zip file. Skipping extraction."
             return True, "Archive extracted successfully."
 
-        elif archive_type == 'rar':
+        elif archive_type == "rar":
             archive_data = BytesIO(archive_file.read())
-            # rarfile prefers fileobj= for in-memory data
             with rarfile.RarFile(fileobj=archive_data) as rf:
                 try:
-                    rf.extractall(path=destination, pwd=zip_password)
+                    rf.extractall(path=destination, pwd=_pwd_str(zip_password))
                 except rarfile.BadRarFile:
-                    return False, "Incorrect password for rar file. File deleted."
+                    return False, "Incorrect password for rar file. Skipping extraction."
                 except rarfile.NeedFirstVolume:
                     return False, "Multi-part RAR not supported (need first volume)."
                 except rarfile.RarCannotExec as e:
@@ -42,8 +54,8 @@ def extract_archive(archive_file, destination, archive_type, zip_password):
 
     except (pyzipper.BadZipFile, rarfile.BadRarFile):
         return False, f"Not a valid {archive_type} file."
-    except Exception as exception:
-        return False, f"Error extracting {archive_type}: {str(exception)}"
+    except Exception as exc:
+        return False, f"Error extracting {archive_type}: {exc}"
 
 
 def run_script(project_directory, upload_token):
