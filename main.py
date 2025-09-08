@@ -1,10 +1,8 @@
 import logging
-import os
 
 from pathlib import Path
 from cfg import load_config
 from data_ingestion import DataIngestionApp
-from database.setup_db import initialize_databases
 
 
 def main():
@@ -21,16 +19,11 @@ def main():
         logging.error(f"Could not load configuration: {e}")
         return
 
-    # Initialize databases if they don't exist
-    initialize_databases(config)
-
     # Create the main application instance.
     app = DataIngestionApp(config=config, chunking_enabled=True)
 
     files_dir = current_dir / "files"
-    loader = app.get_unstructured_loader(directory_path=files_dir)
-
-
+    loader = app.get_docling_loader(directory_path=files_dir)
 
     app.register_loader(loader)
 

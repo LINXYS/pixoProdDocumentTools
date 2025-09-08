@@ -1,5 +1,0 @@
-chunk_overlap: 200
-chunk_size: 1000
-embedding_provider: openai
-project_id: 25f8a8a0-7925-4085-9db9-beffc8e40ae7
-use_chunking: true

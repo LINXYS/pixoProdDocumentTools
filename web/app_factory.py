@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, render_template_string, abort, Response
+from flask import Flask, request, render_template_string, abort
 from werkzeug.utils import secure_filename
 from .templates import HTML_TEMPLATE, UPLOAD_RESULT_TEMPLATE
 from .utils import extract_archive, run_script
@@ -58,8 +58,8 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         token = request.form.get("token", "")
         if token != upload_token:
             return abort(403, description="Invalid or missing token")
-        
-        return Response(run_script(app.config["PROJECT_DIR"], upload_token), mimetype="text/html")
+
+        return run_script(app.config["PROJECT_DIR"], upload_token)
 
     @app.route("/shutdown", methods=["POST"])
     def shutdown():
