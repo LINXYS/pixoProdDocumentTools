@@ -2,6 +2,13 @@ import logging
 from typing import List, Optional
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import ProgrammingError
+
+try:
+    import psycopg  # psycopg v3
+except Exception:
+    psycopg = None
+
 from langchain.indexes import SQLRecordManager
 from langchain_core.documents import Document
 from langchain_core.indexing import index
@@ -11,6 +18,32 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_postgres import PGEngine, PGVectorStore
 
 from cfg import IngestionConfig
+
+
+def _is_duplicate_table_error(err: ProgrammingError) -> bool:
+    """
+    Return True if the ProgrammingError represents a 'table already exists'
+    condition. Works with psycopg v3 and also falls back to message matching
+    (including German error text).
+    """
+    orig = getattr(err, "orig", None)
+    if psycopg is not None:
+        try:
+            from psycopg.errors import DuplicateTable, DuplicateSchema, DuplicateObject  # type: ignore
+        except Exception:
+            DuplicateTable = DuplicateSchema = DuplicateObject = None  # type: ignore
+        if (DuplicateTable and isinstance(orig, DuplicateTable)) or \
+           (DuplicateSchema and isinstance(orig, DuplicateSchema)) or \
+           (DuplicateObject and isinstance(orig, DuplicateObject)):
+            return True
+
+    msg = (str(err) or "").lower()
+    return (
+        "duplicatetable" in msg
+        or "duplicate table" in msg
+        or "already exists" in msg
+        or "existiert bereits" in msg
+    )
 
 
 class LangChainIndexer:
@@ -57,17 +90,30 @@ class LangChainIndexer:
             # Soft validation for OpenAI known sizes
             try:
                 model = getattr(self.embedding, "model", "") or getattr(self.embedding, "model_name", "")
-                known = {"text-embedding-3-large": 3072, "text-embedding-3-small": 1536, "text-embedding-ada-002": 1536}
+                known = {
+                    "text-embedding-3-large": 3072,
+                    "text-embedding-3-small": 1536,
+                    "text-embedding-ada-002": 1536,
+                }
                 if model in known and known[model] != vector_size:
-                    logging.warning(f"Configured vector_size={vector_size} differs from OpenAI default for {model} ({known[model]}). Using configured value.")
+                    logging.warning(
+                        f"Configured vector_size={vector_size} differs from OpenAI default for {model} ({known[model]}). Using configured value."
+                    )
             except Exception:
                 pass
-        self.pg_engine.init_vectorstore_table(
-            table_name=self.table_name,
-            vector_size=vector_size,
-            # If you need SQL-filterable metadata columns later, declare them here:
-            # metadata_columns=[Column("source", "TEXT"), Column("topic", "TEXT")]
-        )
+
+        try:
+            self.pg_engine.init_vectorstore_table(
+                table_name=self.table_name,
+                vector_size=vector_size,
+                # If you need SQL-filterable metadata columns later, declare them here:
+                # metadata_columns=[Column("source", "TEXT"), Column("topic", "TEXT")]
+            )
+        except ProgrammingError as e:
+            if _is_duplicate_table_error(e):
+                logging.info('Table "%s" already exists; continuing.', self.table_name)
+            else:
+                raise
 
         # 4) Create the vectorstore (sync)
         self.vectorstore = PGVectorStore.create_sync(
@@ -83,7 +129,16 @@ class LangChainIndexer:
         rm_engine = create_engine(rm_url)
         namespace = f"pgvector/{self.table_name}"
         self.record_manager = SQLRecordManager(namespace, engine=rm_engine)
-        self.record_manager.create_schema()
+
+        # Make schema creation tolerant as well (usually already idempotent,
+        # but we guard against drivers that may raise on duplicates).
+        try:
+            self.record_manager.create_schema()
+        except ProgrammingError as e:
+            if _is_duplicate_table_error(e):
+                logging.info("Record manager schema already exists; continuing.")
+            else:
+                raise
 
     def index_documents(self, docs: List[Document], cleanup_mode: Optional[str] = "incremental") -> dict:
         """

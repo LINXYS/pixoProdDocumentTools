@@ -223,68 +223,52 @@ class DataIngestionApp:
         logging.info("Ingestion complete.")
 
     def _build_docling_converter(self):
-        """
-        Build a Docling DocumentConverter that uses GPU if available.
-        Prefers CUDA, then Apple MPS, else CPU. Falls back to AUTO on errors.
-        """
-        try:
-            from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
-            from docling.datamodel.base_models import InputFormat
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
-            from docling.document_converter import DocumentConverter, PdfFormatOption
-        except Exception as e:
-            logging.debug(f"Docling accelerator not configured (missing deps): {e}")
-            return None
+        from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
 
-        # Choose the best accelerator we can find
+        device = AcceleratorDevice.AUTO
+        torch_info = {}
         try:
-            import torch
+            import torch, subprocess, shutil
+            torch_info = {
+                "torch_version": getattr(torch, "__version__", "?"),
+                "torch_cuda": getattr(torch.version, "cuda", None),
+                "cuda_available": torch.cuda.is_available(),
+                "cuda_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+                "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            }
             if torch.cuda.is_available():
                 device = AcceleratorDevice.CUDA
             elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
                 device = AcceleratorDevice.MPS
             else:
                 device = AcceleratorDevice.CPU
-        except Exception:
-            # Let Docling auto-detect if torch isn't around
+        except Exception as e:
+            logging.warning(f"PyTorch check failed; defaulting to AUTO. Error: {e}")
             device = AcceleratorDevice.AUTO
 
-        accel = AcceleratorOptions(num_threads=os.cpu_count() or 8, device=device)
-        try:
-            dev_name = getattr(device, "name", str(device))
-        except Exception:
-            dev_name = str(device)
-        logging.info(f"Docling accelerator set to: {dev_name}")
+        logging.info(f"Docling/torch info: {torch_info}")
+        logging.info(f"Docling accelerator set to: {getattr(device, 'name', device)}")
 
+        accel = AcceleratorOptions(num_threads=os.cpu_count() or 8, device=device)
         pdf_opts = PdfPipelineOptions()
         pdf_opts.accelerator_options = accel
-        # Keep default OCR behavior; Docling will enable it when necessary.
 
         return DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)
-            }
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
         )
 
     def get_docling_loader(self, directory_path: str):
         """
         Return a Docling-based loader over all files in `directory_path`.
         Uses MARKDOWN export and lets the token-aware splitter handle chunking.
-        If no OCR engine is present, image-only files are skipped.
         """
-        # OCR check
-        ocr_available = shutil.which("tesseract") is not None
-        if not ocr_available:
-            warnings.warn("No OCR engine detected (e.g., Tesseract). Image-only files will be skipped.")
 
         # Gather files
         files = glob.glob(join(directory_path, "**/*"), recursive=True)
         files = [f for f in files if os.path.isfile(f)]
-
-        # Skip images if OCR not available
-        if not ocr_available:
-            image_extensions = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif"}
-            files = [f for f in files if os.path.splitext(f)[1].lower() not in image_extensions]
 
         # Remove .pixodoc files (handled elsewhere)
         files = [f for f in files if os.path.splitext(f)[1].lower() != ".pixodoc"]
