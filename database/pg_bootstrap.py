@@ -175,8 +175,8 @@ def bootstrap_postgres_if_needed(
 
     print("\n✅ Done.")
     print("Set these in your .env for future runs:")
-    print(f"  DATABASE_URL={db_url}")
-    print(f"  RECORD_MANAGER_DATABASE_URL={rm_url}\n")
+    print(f"DATABASE_URL={db_url}?keepalives=1&keepalives_idle=60&keepalives_interval=30&keepalives_count=5&options=-c%20client_encoding%3Dutf8")
+    print(f"RECORD_MANAGER_DATABASE_URL={rm_url}?keepalives=1&keepalives_idle=60&keepalives_interval=30&keepalives_count=5&options=-c%20client_encoding%3Dutf8\n")
 
     # Quick sanity output
     try:
