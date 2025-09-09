@@ -1,3 +1,4 @@
+# langchain_indexer.py
 import logging
 from typing import List, Optional
 
@@ -21,11 +22,6 @@ from cfg import IngestionConfig
 
 
 def _is_duplicate_table_error(err: ProgrammingError) -> bool:
-    """
-    Return True if the ProgrammingError represents a 'table already exists'
-    condition. Works with psycopg v3 and also falls back to message matching
-    (including German error text).
-    """
     orig = getattr(err, "orig", None)
     if psycopg is not None:
         try:
@@ -49,13 +45,6 @@ def _is_duplicate_table_error(err: ProgrammingError) -> bool:
 class LangChainIndexer:
     """
     Uses langchain-postgres v2 (PGEngine + PGVectorStore).
-
-    - Creates a Postgres engine and vector store table
-    - Instantiates a PGVectorStore (sync)
-    - Uses SQLRecordManager + LangChain indexing API for de-dupe/cleanup
-
-    NOTE: The record manager namespace still includes the collection name so
-    each collection gets its own record manager.
     """
 
     def __init__(self, config: IngestionConfig):
@@ -84,10 +73,8 @@ class LangChainIndexer:
         # 3) Create the vectorstore table (idempotent)
         vector_size = getattr(config, "vector_size", None)
         if not vector_size:
-            # Fallback only if not provided in config
             vector_size = self._infer_vector_size(self.embedding)
         else:
-            # Soft validation for OpenAI known sizes
             try:
                 model = getattr(self.embedding, "model", "") or getattr(self.embedding, "model_name", "")
                 known = {
@@ -106,8 +93,6 @@ class LangChainIndexer:
             self.pg_engine.init_vectorstore_table(
                 table_name=self.table_name,
                 vector_size=vector_size,
-                # If you need SQL-filterable metadata columns later, declare them here:
-                # metadata_columns=[Column("source", "TEXT"), Column("topic", "TEXT")]
             )
         except ProgrammingError as e:
             if _is_duplicate_table_error(e):
@@ -120,18 +105,26 @@ class LangChainIndexer:
             engine=self.pg_engine,
             table_name=self.table_name,
             embedding_service=self.embedding,
-            # If you declared typed metadata columns above and want to filter on them:
-            # metadata_columns=["source", "topic"],
         )
 
-        # 5) Record manager (separate DB or same Postgres — your choice)
+        # 5) Record manager (make engine robust)
         rm_url = self._ensure_psycopg_scheme(config.record_manager_db_url)
-        rm_engine = create_engine(rm_url)
+        rm_engine = create_engine(
+            rm_url,
+            pool_pre_ping=True,         # transparently reconnect if dead
+            pool_recycle=900,           # recycle every 15 min
+            connect_args={
+                "options": "-c client_encoding=utf8 -c statement_timeout=600000",
+                "keepalives": 1,
+                "keepalives_idle": 60,
+                "keepalives_interval": 30,
+                "keepalives_count": 5,
+            },
+        )
+        self.rm_engine = rm_engine
         namespace = f"pgvector/{self.table_name}"
         self.record_manager = SQLRecordManager(namespace, engine=rm_engine)
 
-        # Make schema creation tolerant as well (usually already idempotent,
-        # but we guard against drivers that may raise on duplicates).
         try:
             self.record_manager.create_schema()
         except ProgrammingError as e:
@@ -143,10 +136,13 @@ class LangChainIndexer:
     def index_documents(self, docs: List[Document], cleanup_mode: Optional[str] = "incremental") -> dict:
         """
         Index documents using LangChain's indexing API.
-        cleanup_mode: None | "incremental" | "full" | "scoped_full"
-        `source_id_key` stays "source" (must be present in each Document.metadata).
         """
         logging.info("Starting indexing via LangChain indexing API...")
+        # drop any stale pooled conns before long indexing
+        try:
+            self.rm_engine.dispose()
+        except Exception:
+            pass
         result = index(
             docs,
             self.record_manager,
@@ -159,7 +155,6 @@ class LangChainIndexer:
 
     @staticmethod
     def _ensure_psycopg_scheme(url: str) -> str:
-        """Force psycopg driver for sync PGEngine/PGVectorStore APIs."""
         if url.startswith("postgresql+"):
             return url
         if url.startswith("postgres://"):
@@ -168,7 +163,6 @@ class LangChainIndexer:
 
     @staticmethod
     def _infer_vector_size(embedding) -> int:
-        """Best effort: use known OpenAI dims, else probe one embedding."""
         try:
             model = getattr(embedding, "model", "") or getattr(embedding, "model_name", "")
             if "text-embedding-3-large" in model:
@@ -179,6 +173,5 @@ class LangChainIndexer:
                 return 1536
         except Exception:
             pass
-        # Fallback probe (runs one embedding request)
         vec = embedding.embed_query("dimension probe")
         return len(vec)
