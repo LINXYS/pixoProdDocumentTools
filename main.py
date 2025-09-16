@@ -22,10 +22,17 @@ def main():
     # Create the main application instance.
     app = DataIngestionApp(config=config, chunking_enabled=True)
 
+    # Register file loader
     files_dir = current_dir / "files"
-    loader = app.get_docling_loader(directory_path=files_dir)
+    if files_dir.exists():
+        loader_docling = app.get_docling_loader(directory_path=files_dir)
+        app.register_loader(loader_docling)
 
-    app.register_loader(loader)
+    # Register URL Loader
+    urls_file = current_dir / "urls.json"
+    if urls_file.exists():
+        loader_websites = app.get_website_loader(urls_json_path=urls_file)
+        app.register_loader(loader_websites)
 
     app.ingest_data()
 

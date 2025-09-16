@@ -16,6 +16,15 @@ HTML_TEMPLATE = """
     <h2>Start Process</h2>
     <form method="POST" action="/start">
       <input type="hidden" name="token" value="{{ token }}" />
+      <div style="margin:8px 0;">
+        <label for="urls"><strong>List of URLs</strong> (newline separated)</label><br>
+        <textarea id="urls" name="urls" rows="6" cols="80" placeholder="https://example.com/page-1
+https://example.com/page-2">{{ urls_text or "" }}</textarea>
+      </div>
+      <div style="margin:8px 0;">
+        <label for="sitemap_url"><strong>Sitemap URL</strong></label><br>
+        <input id="sitemap_url" name="sitemap_url" type="url" size="80" placeholder="https://example.com/sitemap.xml" value="{{ sitemap_url or '' }}" />
+      </div>
       <button type="submit">Start</button>
     </form>
     <hr>

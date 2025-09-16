@@ -1,3 +1,4 @@
+import json
 import os
 from flask import Flask, request, render_template_string, abort
 from werkzeug.utils import secure_filename
@@ -58,6 +59,47 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         token = request.form.get("token", "")
         if token != upload_token:
             return abort(403, description="Invalid or missing token")
+
+        # Parse inputs
+        raw_urls = request.form.get("urls", "") or ""
+        sitemap_url = request.form.get("sitemap_url", "") or ""
+
+        def normalize_urls(text):
+            # newline separated is primary; also allow commas within lines
+            items = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                # further split by comma if present
+                for part in line.split(","):
+                    u = part.strip()
+                    if not u:
+                        continue
+                    items.append(u)
+            # dedupe while preserving order
+            seen = set()
+            ordered = []
+            for u in items:
+                if u not in seen:
+                    seen.add(u)
+                    ordered.append(u)
+            return ordered
+
+        urls_list = normalize_urls(raw_urls)
+
+        # Always write urls.json (even if empty), into the project directory
+        urls_payload = {
+            "urls": urls_list,
+            "sitemap_url": sitemap_url.strip()
+        }
+        try:
+            os.makedirs(app.config["PROJECT_DIR"], exist_ok=True)
+            urls_path = os.path.join(app.config["PROJECT_DIR"], "urls.json")
+            with open(urls_path, "w", encoding="utf-8") as f:
+                json.dump(urls_payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return f"Failed to write urls.json: {e}", 500
 
         return run_script(app.config["PROJECT_DIR"], upload_token)
 

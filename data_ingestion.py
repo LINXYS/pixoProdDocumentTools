@@ -1,6 +1,8 @@
 import logging
 import sys, asyncio
 
+import website_loader
+
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -14,7 +16,7 @@ from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tqdm import tqdm
 
 from cfg import IngestionConfig
@@ -260,7 +262,7 @@ class DataIngestionApp:
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
         )
 
-    def get_docling_loader(self, directory_path: str):
+    def get_docling_loader(self, directory_path: str) -> DoclingLoader:
         """
         Return a Docling-based loader over all files in `directory_path`.
         Uses MARKDOWN export and lets the token-aware splitter handle chunking.
@@ -324,7 +326,6 @@ class DataIngestionApp:
             converter=converter,
         )
 
-    # --- NEW: utilities to persist Docling-processed files ---
     def _extract_source_path(self, metadata: dict) -> Optional[Path]:
         """
         Try to recover the original file path from common metadata keys.
@@ -389,3 +390,42 @@ class DataIngestionApp:
                 logging.info(f"Wrote processed file: {out_path}")
             except Exception as e:
                 logging.error(f"Failed to write {out_path}: {e}")
+
+    # --- NEW: website ingestion registration from urls.json ---
+    def get_website_loader(self, urls_json_path: Optional[Path] = None) -> BaseLoader:
+        """
+        Read website ingestion settings from a urls.json file and register a loader that
+        yields the resulting documents when loaded.
+        The JSON may include:
+          - "urls": list[str]           # explicit page URLs
+          - "sitemap_url": str          # a sitemap XML URL
+          - "site_root": str            # a site root (robots.txt discovery)
+          - "limit": int (optional)
+          - "max_workers": int (optional, default 8)
+          - "min_words": int (optional, default 40)
+        If multiple sources are provided, they are concatenated (deduped by the website_loader).
+        """
+        cfg_path = urls_json_path or (Path.cwd() / "urls.json")
+        if not cfg_path.exists():
+            logging.info(f"No urls.json found at {cfg_path}; skipping website source registration.")
+            return
+
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logging.error(f"Failed to read/parse {cfg_path}: {e}")
+            return
+
+        urls: List[str] = data.get("urls") or []
+        sitemap_url: Optional[str] = data.get("sitemap_url")
+        site_root: Optional[str] = data.get("site_root")
+        limit: Optional[int] = data.get("limit")
+        max_workers: int = int(data.get("max_workers", 8))
+        min_words: int = int(data.get("min_words", 40))
+
+        if not urls and not sitemap_url and not site_root:
+            logging.info("urls.json contains no 'urls', 'sitemap_url', or 'site_root'; nothing to register.")
+            return
+
+        loader = website_loader.WebsiteLoader(urls, sitemap_url, site_root, limit, max_workers, min_words)
+        return loader
