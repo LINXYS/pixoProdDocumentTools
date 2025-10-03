@@ -63,6 +63,7 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         # Parse inputs
         raw_urls = request.form.get("urls", "") or ""
         sitemap_url = request.form.get("sitemap_url", "") or ""
+        css_selector = request.form.get("css_selector", "") or ""
 
         def normalize_urls(text):
             # newline separated is primary; also allow commas within lines
@@ -91,7 +92,8 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         # Always write urls.json (even if empty), into the project directory
         urls_payload = {
             "urls": urls_list,
-            "sitemap_url": sitemap_url.strip()
+            "sitemap_url": sitemap_url.strip(),
+            "css_selector": css_selector.strip(),
         }
         try:
             os.makedirs(app.config["PROJECT_DIR"], exist_ok=True)

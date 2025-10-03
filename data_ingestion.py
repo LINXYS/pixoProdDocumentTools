@@ -422,10 +422,19 @@ class DataIngestionApp:
         limit: Optional[int] = data.get("limit")
         max_workers: int = int(data.get("max_workers", 8))
         min_words: int = int(data.get("min_words", 40))
+        css_selector: Optional[str] = (data.get("css_selector") or "").strip() or None
 
         if not urls and not sitemap_url and not site_root:
             logging.info("urls.json contains no 'urls', 'sitemap_url', or 'site_root'; nothing to register.")
             return
 
-        loader = website_loader.WebsiteLoader(urls, sitemap_url, site_root, limit, max_workers, min_words)
+        loader = website_loader.WebsiteLoader(
+            urls=urls,
+            sitemap_url=sitemap_url,
+            site_root=site_root,
+            limit=limit,
+            max_workers=max_workers,
+            min_words=min_words,
+            css_selector=css_selector
+        )
         return loader

@@ -1,4 +1,5 @@
 # HTML template for the main page
+# HTML template for the main page
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -25,6 +26,18 @@ https://example.com/page-2">{{ urls_text or "" }}</textarea>
         <label for="sitemap_url"><strong>Sitemap URL</strong></label><br>
         <input id="sitemap_url" name="sitemap_url" type="url" size="80" placeholder="https://example.com/sitemap.xml" value="{{ sitemap_url or '' }}" />
       </div>
+
+      <!-- NEW: Optional CSS selector -->
+      <div style="margin:8px 0;">
+        <label for="css_selector"><strong>CSS selector (optional)</strong></label><br>
+        <input id="css_selector" name="css_selector" type="text" size="80"
+               placeholder="div.cms-block.pos-1.cms-block-text.position-relative"
+               value="{{ css_selector or '' }}" />
+        <div style="font-size:12px;color:#666;margin-top:4px;">
+          If provided, only text inside matching elements is extracted.
+        </div>
+      </div>
+
       <button type="submit">Start</button>
     </form>
     <hr>
@@ -36,6 +49,7 @@ https://example.com/page-2">{{ urls_text or "" }}</textarea>
 </body>
 </html>
 """
+
 
 # HTML template to display upload results
 UPLOAD_RESULT_TEMPLATE = """
