@@ -34,7 +34,7 @@ https://example.com/page-2">{{ urls_text or "" }}</textarea>
                placeholder="div.cms-block.pos-1.cms-block-text.position-relative"
                value="{{ css_selector or '' }}" />
         <div style="font-size:12px;color:#666;margin-top:4px;">
-          If provided, only text inside matching elements is extracted.
+          Enter all classes of the div here. If provided, only text inside matching elements is extracted.
         </div>
       </div>
 

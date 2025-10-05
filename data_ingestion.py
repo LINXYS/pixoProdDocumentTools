@@ -423,6 +423,8 @@ class DataIngestionApp:
         max_workers: int = int(data.get("max_workers", 8))
         min_words: int = int(data.get("min_words", 40))
         css_selector: Optional[str] = (data.get("css_selector") or "").strip() or None
+        if css_selector and " " in css_selector:
+            css_selector = css_selector.replace(" ", ".")
 
         if not urls and not sitemap_url and not site_root:
             logging.info("urls.json contains no 'urls', 'sitemap_url', or 'site_root'; nothing to register.")
