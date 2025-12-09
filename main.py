@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from cfg import load_config
 from data_ingestion import DataIngestionApp
+from remote_sync import sync_remote_to_local
 
 
 def main():
@@ -11,27 +12,40 @@ def main():
                         format='%(asctime)s - %(levelname)s - %(message)s')
 
     # Load configuration from the YAML config file and environment variable.
+    current_dir = Path.cwd()
     try:
-        current_dir = Path.cwd()
-        config_path = current_dir / "config.yaml"
-        config = load_config(config_path)
+        # load_config will resolve config.yaml relative to the main script directory
+        config = load_config()
     except Exception as e:
         logging.error(f"Could not load configuration: {e}")
         return
+
+    # Ensure files directory exists (used for uploads and remote sync)
+    files_dir = current_dir / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    # Optional: sync remote files (FTP/FTPS/SFTP) into files/
+    remote_cfg = getattr(config, "remote_source", None)
+    if remote_cfg:
+        try:
+            logging.info("Remote source configured; starting sync to local files/ directory.")
+            sync_remote_to_local(remote_cfg, files_dir)
+            logging.info("Remote sync completed.")
+        except Exception as e:
+            logging.error(f"Remote sync failed: {e}")
+            return
 
     # Create the main application instance.
     app = DataIngestionApp(config=config, chunking_enabled=True)
 
     # Register file loader
-    files_dir = current_dir / "files"
     if files_dir.exists():
         loader_docling = app.get_docling_loader(directory_path=files_dir)
         app.register_loader(loader_docling)
 
     # Register URL Loader
-    urls_file = current_dir / "urls.json"
-    if urls_file.exists():
-        loader_websites = app.get_website_loader(urls_json_path=urls_file)
+    loader_websites = app.get_website_loader()
+    if loader_websites is not None:
         app.register_loader(loader_websites)
 
     app.ingest_data()

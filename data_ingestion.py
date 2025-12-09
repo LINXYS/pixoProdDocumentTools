@@ -391,44 +391,39 @@ class DataIngestionApp:
             except Exception as e:
                 logging.error(f"Failed to write {out_path}: {e}")
 
-    # --- NEW: website ingestion registration from urls.json ---
-    def get_website_loader(self, urls_json_path: Optional[Path] = None) -> BaseLoader:
+    # --- Website ingestion registration from config ---
+    def get_website_loader(self) -> Optional[BaseLoader]:
         """
-        Read website ingestion settings from a urls.json file and register a loader that
+        Read website ingestion settings from the loaded config and return a loader that
         yields the resulting documents when loaded.
-        The JSON may include:
-          - "urls": list[str]           # explicit page URLs
-          - "sitemap_url": str          # a sitemap XML URL
-          - "site_root": str            # a site root (robots.txt discovery)
-          - "limit": int (optional)
-          - "max_workers": int (optional, default 8)
-          - "min_words": int (optional, default 40)
-        If multiple sources are provided, they are concatenated (deduped by the website_loader).
+
+        The config.ingestion section may include:
+          - urls: list[str]           # explicit page URLs
+          - sitemap_url: str          # a sitemap XML URL
+          - site_root: str            # a site root (robots.txt discovery)
+          - limit: int (optional)
+          - max_workers: int (optional, default 8)
+          - min_words: int (optional, default 40)
+          - css_selector: str (optional)
         """
-        cfg_path = urls_json_path or (Path.cwd() / "urls.json")
-        if not cfg_path.exists():
-            logging.info(f"No urls.json found at {cfg_path}; skipping website source registration.")
-            return
+        urls: List[str] = getattr(self.config, "urls", []) or []
+        sitemap_url: Optional[str] = getattr(self.config, "sitemap_url", None)
+        site_root: Optional[str] = getattr(self.config, "site_root", None)
 
-        try:
-            data = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logging.error(f"Failed to read/parse {cfg_path}: {e}")
-            return
+        # Optional website loader tuning parameters
+        limit: Optional[int] = getattr(self.config, "limit", None)
+        max_workers: int = int(getattr(self.config, "max_workers", 8) or 8)
+        min_words: int = int(getattr(self.config, "min_words", 40) or 40)
 
-        urls: List[str] = data.get("urls") or []
-        sitemap_url: Optional[str] = data.get("sitemap_url")
-        site_root: Optional[str] = data.get("site_root")
-        limit: Optional[int] = data.get("limit")
-        max_workers: int = int(data.get("max_workers", 8))
-        min_words: int = int(data.get("min_words", 40))
-        css_selector: Optional[str] = (data.get("css_selector") or "").strip() or None
+        css_selector: Optional[str] = getattr(self.config, "css_selector", None)
+        if css_selector:
+            css_selector = css_selector.strip() or None
         if css_selector and " " in css_selector:
             css_selector = css_selector.replace(" ", ".")
 
         if not urls and not sitemap_url and not site_root:
-            logging.info("urls.json contains no 'urls', 'sitemap_url', or 'site_root'; nothing to register.")
-            return
+            logging.info("No website ingestion settings found in config; skipping website source registration.")
+            return None
 
         loader = website_loader.WebsiteLoader(
             urls=urls,
@@ -437,6 +432,11 @@ class DataIngestionApp:
             limit=limit,
             max_workers=max_workers,
             min_words=min_words,
-            css_selector=css_selector
+            css_selector=css_selector,
+        )
+        logging.info(
+            f"Website loader configured with {len(urls)} URL(s), "
+            f"sitemap_url={sitemap_url}, site_root={site_root}, "
+            f"css_selector={css_selector}"
         )
         return loader
