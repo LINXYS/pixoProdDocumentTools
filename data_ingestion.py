@@ -192,6 +192,9 @@ class DataIngestionApp:
         print()
         logging.info("Starting ingestion... Processing Docling file batches.")
 
+        # Canonical root for all doc files (used for state keys)
+        files_dir = Path.cwd() / "files"
+
         # ---------- Process Docling file batches until all files are done ----------
         batch_round = 0
         while True:
@@ -244,15 +247,12 @@ class DataIngestionApp:
                         grouped[key].append(d)
 
                     for key, parts in grouped.items():
-                        # Determine relative tracking key
+                        # Determine relative tracking key (must match get_docling_loaders)
                         if key.startswith("__unknown__/"):
                             rel_key = key
                         else:
                             src_path = Path(key)
-                            try:
-                                rel_key = str(src_path.relative_to(files_dir))
-                            except Exception:
-                                rel_key = src_path.name
+                            rel_key = self._normalize_doc_rel_path(src_path, files_dir)
 
                         if self.state.is_doc_file_done(rel_key):
                             logging.info(f"Skipping Docling source (already processed): {rel_key}")
@@ -431,10 +431,7 @@ class DataIngestionApp:
         remaining_files = []
         for f in files:
             p = Path(f)
-            try:
-                rel = str(p.relative_to(files_root))
-            except Exception:
-                rel = p.name
+            rel = self._normalize_doc_rel_path(p, files_root)
             if self.state.is_doc_file_done(rel):
                 logging.info(f"Docling: skipping already-processed file: {rel}")
                 continue
@@ -543,6 +540,29 @@ class DataIngestionApp:
     def get_docling_loader(self, directory_path: str) -> Optional[DoclingLoader]:
         loaders = self.get_docling_loaders(directory_path)
         return loaders[0] if loaders else None
+
+    def _normalize_doc_rel_path(self, src_path: Path, files_root: Path) -> str:
+        """
+        Compute a canonical, case-insensitive relative key for a document file.
+        This MUST be used consistently everywhere we talk to IngestionState
+        for doc_files so that:
+          - get_docling_loaders() skipping logic
+          - ingest_data() mark_doc_file_done()
+        agree on the exact same key for the same physical file.
+        """
+        try:
+            # Use resolved paths to avoid minor differences like "files/./sub/../sub/file.pdf"
+            files_root_resolved = files_root.resolve()
+            src_resolved = src_path.resolve()
+            rel = src_resolved.relative_to(files_root_resolved)
+        except Exception:
+            # If the file is not under files_root (or resolution fails), fall back
+            # to the filename only. This is not perfect but is at least consistent
+            # across both caller sites.
+            rel = src_path.name
+
+        # Normalize to POSIX separators + lowercase for cross-platform stability
+        return rel.as_posix().lower()
 
     def _extract_source_path(self, metadata: dict) -> Optional[Path]:
         """
