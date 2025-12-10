@@ -25,6 +25,7 @@ import glob
 import os
 import shutil
 import warnings
+from ingestion_state import IngestionState
 
 # Local imports to avoid hard dependency if not used elsewhere
 try:
@@ -52,11 +53,24 @@ class DataIngestionApp:
     Ties together document loaders, optional chunking, and indexing via LangChain.
     """
 
-    def __init__(self, config: IngestionConfig, chunking_enabled: bool = True):
+    def __init__(
+        self,
+        config: IngestionConfig,
+        chunking_enabled: bool = True,
+        project_dir: Optional[Path] = None,
+        ingestion_state: Optional[IngestionState] = None,
+    ):
         self.config = config
         self.indexer = LangChainIndexer(config)
         self.loaders: List[BaseLoader] = []
         self.disable_bar = True
+        self.project_dir = Path(project_dir or Path.cwd())
+        state_path = self.project_dir / "ingestion_state.json"
+        self.state = ingestion_state or IngestionState(state_path)
+        logging.info(
+            f"DataIngestionApp initialized with docling_batch_size="
+            f"{getattr(self.config, 'docling_batch_size', None)!r}"
+        )
         if not chunking_enabled:
             self.config.chunk_size = 10000000000000
 
@@ -100,7 +114,6 @@ class DataIngestionApp:
           - For all other loaders: use the normal token-aware splitter.
           - For .pixodoc files: use the normal token-aware splitter.
         """
-        all_documents: List[Document] = []
 
         # ---------- .pixodoc files first ----------
         files_dir = Path.cwd() / "files"
@@ -117,6 +130,16 @@ class DataIngestionApp:
                 file=sys.stdout,
         ):
             try:
+                rel_path = ""
+                try:
+                    rel_path = str(Path(file).relative_to(files_dir))
+                except Exception:
+                    rel_path = str(Path(file).name)
+
+                if self.state.is_pixodoc_done(rel_path):
+                    logging.info(f"Skipping .pixodoc (already processed): {rel_path}")
+                    continue
+
                 with open(file, "r", encoding="utf-8") as f:
                     doc_data = json.load(f)
             except UnicodeDecodeError:
@@ -144,22 +167,113 @@ class DataIngestionApp:
                 metadata=doc_data.get("metadata", {}) or {},
             )
 
+            # Per-file chunk + index immediately
+            docs_to_index: List[Document]
             if self.config.use_chunking:
                 splitter = self.get_token_splitter()
                 parts = splitter.split_text(doc.page_content or "")
-                all_documents.extend([Document(page_content=p, metadata=doc.metadata) for p in parts])
+                docs_to_index = [Document(page_content=p, metadata=doc.metadata) for p in parts]
                 logging.info(
                     f"Split .pixodoc {os.path.basename(file)} into {len(parts)} chunk(s) "
                     f"(target={self.config.chunk_size}, overlap={self.config.chunk_overlap})."
                 )
             else:
-                all_documents.append(doc)
+                docs_to_index = [doc]
+
+            if docs_to_index:
+                try:
+                    self.indexer.index_documents(docs_to_index, cleanup_mode="incremental")
+                    self.state.mark_pixodoc_done(rel_path)
+                    logging.info(f"Indexed .pixodoc file and marked done: {rel_path}")
+                except Exception as e:
+                    logging.error(f"Indexing failed for .pixodoc {rel_path}: {e}")
 
         logging.info(f"Loaded {len(pixodoc_files)} .pixodoc files.")
         print()
-        logging.info("Starting ingestion... Processing loaders.")
+        logging.info("Starting ingestion... Processing Docling file batches.")
 
-        # ---------- Process registered loaders ----------
+        # ---------- Process Docling file batches until all files are done ----------
+        batch_round = 0
+        while True:
+            docling_loaders = self.get_docling_loaders(directory_path=str(files_dir))
+            if not docling_loaders:
+                logging.info("Docling: no more file batches to process.")
+                break
+
+            batch_round += 1
+            logging.info(
+                f"Docling: starting round {batch_round} with "
+                f"{len(docling_loaders)} loader batch(es)."
+            )
+
+            for i, loader in enumerate(docling_loaders, start=1):
+                try:
+                    # Expect loader to be configured with ExportType.DOC_CHUNKS and a Docling chunker.
+                    batch_files = getattr(loader, "file_path", None)
+                    num_files = None
+                    if isinstance(batch_files, (list, tuple, set)):
+                        num_files = len(batch_files)
+                    elif isinstance(batch_files, str):
+                        num_files = 1
+
+                    logging.info(
+                        f"Docling batch {i}/{len(docling_loaders)} in round {batch_round} "
+                        f"starting: {num_files if num_files is not None else 'unknown'} file(s) "
+                        f"(configured batch_size={getattr(self.config, 'docling_batch_size', None)!r})."
+                    )
+
+                    docs = loader.load()
+                    logging.info(
+                        f"Docling batch {i}/{len(docling_loaders)} in round {batch_round} "
+                        f"finished load() with {len(docs) if docs else 0} document(s)."
+                    )
+                    if not docs:
+                        logging.info(f"{loader.__class__.__name__} returned no documents.")
+                        continue
+
+                    # Group Docling docs by original source path and index per source
+                    grouped = defaultdict(list)
+                    unknown_idx = 1
+                    for d in docs:
+                        src_path = self._extract_source_path(d.metadata or {})
+                        if src_path is None:
+                            key = f"__unknown__/doc_{unknown_idx:05d}"
+                            unknown_idx += 1
+                        else:
+                            key = str(src_path)
+                        grouped[key].append(d)
+
+                    for key, parts in grouped.items():
+                        # Determine relative tracking key
+                        if key.startswith("__unknown__/"):
+                            rel_key = key
+                        else:
+                            src_path = Path(key)
+                            try:
+                                rel_key = str(src_path.relative_to(files_dir))
+                            except Exception:
+                                rel_key = src_path.name
+
+                        if self.state.is_doc_file_done(rel_key):
+                            logging.info(f"Skipping Docling source (already processed): {rel_key}")
+                            continue
+
+                        try:
+                            self.indexer.index_documents(parts, cleanup_mode="incremental")
+                            self.state.mark_doc_file_done(rel_key)
+                            logging.info(
+                                f"Indexed Docling source {rel_key} with {len(parts)} chunk(s) "
+                                f"and marked done."
+                            )
+                        except Exception as e:
+                            logging.error(f"Indexing failed for Docling source {rel_key}: {e}")
+                except Exception as e:
+                    logging.error(f"Docling loader batch {i} in round {batch_round} failed: {e}")
+
+        logging.info("Docling file ingestion complete. Proceeding with other loaders (if any).")
+
+        # ---------- Process non-Docling registered loaders (e.g., website) ----------
+        logging.info("Starting ingestion... Processing non-Docling loaders.")
         for loader in tqdm(
                 self.loaders,
                 desc="Processing loaders",
@@ -168,27 +282,58 @@ class DataIngestionApp:
                 file=sys.stdout,
         ):
             try:
-                if isinstance(loader, DoclingLoader):
-                    # Expect loader to be configured with ExportType.DOC_CHUNKS and a Docling chunker.
-                    docs = loader.load()
-                    if not docs:
+                if getattr(loader, "__class__", None).__name__ == "WebsiteLoader":
+                    # Website loader: index per URL and track progress
+                    raw_docs = loader.load()
+                    if not raw_docs:
                         logging.info(f"{loader.__class__.__name__} returned no documents.")
                         continue
 
-                    # If user disabled chunking globally, we still accept Docling's output as-is.
-                    # We do NOT re-split Docling chunks here.
-                    # NEW: persist Docling-processed outputs to disk under processed_files/, preserving files/ structure
-                    try:
-                        self._persist_docling_outputs(docs, files_root=files_dir)
-                    except Exception as e:
-                        logging.error(f"Failed to write processed Docling outputs: {e}")
+                    # Group by URL from metadata
+                    url_groups = defaultdict(list)
+                    for d in raw_docs:
+                        meta = d.metadata or {}
+                        url = meta.get("source") or meta.get("url") or "__unknown__"
+                        url_groups[str(url)].append(d)
 
-                    all_documents.extend(docs)
-                    logging.info(
-                        f"{loader.__class__.__name__} (Docling): received {len(docs)} pre-chunked document(s)."
-                    )
+                    splitter = self.get_token_splitter() if self.config.use_chunking else None
+
+                    for url, docs_for_url in url_groups.items():
+                        if url != "__unknown__" and self.state.is_url_done(url):
+                            logging.info(f"Skipping URL (already processed): {url}")
+                            continue
+
+                        docs_to_index: List[Document]
+                        if splitter:
+                            docs_to_index = []
+                            for d in docs_for_url:
+                                parts = splitter.split_text(d.page_content or "")
+                                docs_to_index.extend(
+                                    [Document(page_content=p, metadata=d.metadata) for p in parts]
+                                )
+                            logging.info(
+                                f"{loader.__class__.__name__}: URL {url} split into "
+                                f"{len(docs_to_index)} chunk(s) (target={self.config.chunk_size}, "
+                                f"overlap={self.config.chunk_overlap})."
+                            )
+                        else:
+                            docs_to_index = docs_for_url
+
+                        if not docs_to_index:
+                            continue
+
+                        try:
+                            self.indexer.index_documents(docs_to_index, cleanup_mode="incremental")
+                            if url != "__unknown__":
+                                self.state.mark_url_done(url)
+                            logging.info(
+                                f"Indexed website URL {url} with {len(docs_to_index)} document(s)/chunk(s)."
+                            )
+                        except Exception as e:
+                            logging.error(f"Indexing failed for website URL {url}: {e}")
+
                 else:
-                    # Normal loaders: load raw then apply our token-aware splitter (if enabled)
+                    # Other loaders: process in one shot (no resume tracking)
                     raw_docs = loader.load()
                     if not raw_docs:
                         logging.info(f"{loader.__class__.__name__} returned no documents.")
@@ -196,31 +341,30 @@ class DataIngestionApp:
 
                     if self.config.use_chunking:
                         splitter = self.get_token_splitter()
-                        before = len(all_documents)
+                        chunked_docs: List[Document] = []
                         for d in raw_docs:
                             parts = splitter.split_text(d.page_content or "")
-                            all_documents.extend(
+                            chunked_docs.extend(
                                 [Document(page_content=p, metadata=d.metadata) for p in parts]
                             )
-                        added = len(all_documents) - before
                         logging.info(
                             f"{loader.__class__.__name__}: split {len(raw_docs)} doc(s) "
-                            f"into {added} chunk(s) (target={self.config.chunk_size}, "
+                            f"into {len(chunked_docs)} chunk(s) (target={self.config.chunk_size}, "
                             f"overlap={self.config.chunk_overlap})."
                         )
+                        docs_to_index = chunked_docs
                     else:
-                        all_documents.extend(raw_docs)
+                        docs_to_index = raw_docs
                         logging.info(
                             f"{loader.__class__.__name__}: added {len(raw_docs)} document(s) (no chunking)."
                         )
+
+                    if docs_to_index:
+                        self.indexer.index_documents(docs_to_index, cleanup_mode="incremental")
             except Exception as e:
                 logging.error(f"Loader {loader.__class__.__name__} failed: {e}")
 
-        # ---------- Index ----------
-        if all_documents:
-            self.indexer.index_documents(all_documents, cleanup_mode=cleanup_mode)
-        else:
-            logging.info("No documents to index.")
+        # Indexing is now done incrementally per file/URL.
         print()
         logging.info("Ingestion complete.")
 
@@ -254,7 +398,7 @@ class DataIngestionApp:
         logging.info(f"Docling/torch info: {torch_info}")
         logging.info(f"Docling accelerator set to: {getattr(device, 'name', device)}")
 
-        accel = AcceleratorOptions(num_threads=os.cpu_count() or 8, device=device)
+        accel = AcceleratorOptions(num_threads=min(os.cpu_count(), 8), device=device)
         pdf_opts = PdfPipelineOptions()
         pdf_opts.accelerator_options = accel
 
@@ -262,10 +406,16 @@ class DataIngestionApp:
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
         )
 
-    def get_docling_loader(self, directory_path: str) -> DoclingLoader:
+    def get_docling_loaders(self, directory_path: str) -> list[DoclingLoader]:
         """
-        Return a Docling-based loader over all files in `directory_path`.
-        Uses MARKDOWN export and lets the token-aware splitter handle chunking.
+        Return one or more Docling-based loaders over files in `directory_path`.
+        Files are optionally batched according to config.docling_batch_size.
+
+        Progress tracking:
+          - We skip files already marked as done in IngestionState.doc_files
+            (relative to the `files/` directory).
+          - Each loader processes a batch of files; ingestion still indexes
+            and marks completion per original source file.
         """
 
         # Gather files
@@ -274,6 +424,29 @@ class DataIngestionApp:
 
         # Remove .pixodoc files (handled elsewhere)
         files = [f for f in files if os.path.splitext(f)[1].lower() != ".pixodoc"]
+
+        files_root = Path(directory_path)
+
+        # Skip files that are already fully processed according to ingestion_state
+        remaining_files = []
+        for f in files:
+            p = Path(f)
+            try:
+                rel = str(p.relative_to(files_root))
+            except Exception:
+                rel = p.name
+            if self.state.is_doc_file_done(rel):
+                logging.info(f"Docling: skipping already-processed file: {rel}")
+                continue
+            remaining_files.append(f)
+
+        files = remaining_files
+
+        if not files:
+            logging.info("Docling: no new files to process (all already ingested).")
+            return []
+
+        logging.info(f"Docling: raw configured batch size={getattr(self.config, 'docling_batch_size', None)!r}")
 
         # Build Docling chunker with a tokenizer
         chunker = None
@@ -312,19 +485,64 @@ class DataIngestionApp:
                 "Could not initialize a Docling tokenizer for HybridChunker. "
                 "Falling back to MARKDOWN export; normal splitter will be used later."
             )
-            return DoclingLoader(
-                file_path=files,
-                export_type=ExportType.MARKDOWN,
-                converter=converter,
+
+        # Determine batch size from config; None or <=0 => single batch
+        batch_size = getattr(self.config, "docling_batch_size", None)
+        try:
+            batch_size = int(batch_size) if batch_size is not None else None
+        except Exception:
+            batch_size = None
+
+        if not batch_size or batch_size <= 0:
+            batch_size = len(files) if files else 0
+
+        loaders: list[DoclingLoader] = []
+        if not files:
+            return loaders
+
+        total_files = len(files)
+        logging.info(
+            f"Docling: preparing loaders for {total_files} file(s) "
+            f"with batch_size={batch_size}."
+        )
+
+        for batch_idx in range(0, total_files, batch_size):
+            batch_files = files[batch_idx: batch_idx + batch_size]
+            if not batch_files:
+                continue
+
+            batch_number = len(loaders) + 1
+            logging.info(
+                f"Docling: creating batch {batch_number} with "
+                f"{len(batch_files)} file(s) "
+                f"({batch_idx + 1}-{batch_idx + len(batch_files)} of {total_files})."
             )
 
-        # Preferred path: Docling performs chunking and returns pre-chunked LangChain Documents
-        return DoclingLoader(
-            file_path=files,
-            export_type=ExportType.DOC_CHUNKS,
-            chunker=chunker,
-            converter=converter,
-        )
+            if chunker is None:
+                # MARKDOWN export; downstream splitter will handle chunking
+                loader = DoclingLoader(
+                    file_path=batch_files,
+                    export_type=ExportType.MARKDOWN,
+                    converter=converter,
+                )
+            else:
+                # Preferred path: Docling performs chunking and returns pre-chunked Documents
+                loader = DoclingLoader(
+                    file_path=batch_files,
+                    export_type=ExportType.DOC_CHUNKS,
+                    chunker=chunker,
+                    converter=converter,
+                )
+
+            loaders.append(loader)
+
+        logging.info(f"Docling: created {len(loaders)} loader batch(es).")
+        return loaders
+
+    # Backwards-compat wrapper (kept in case of external callers)
+    def get_docling_loader(self, directory_path: str) -> Optional[DoclingLoader]:
+        loaders = self.get_docling_loaders(directory_path)
+        return loaders[0] if loaders else None
 
     def _extract_source_path(self, metadata: dict) -> Optional[Path]:
         """

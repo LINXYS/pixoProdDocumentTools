@@ -31,12 +31,14 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         remote_path = ""
         remote_passive = False
         remote_recursive = True
+        force_fresh_run = False
 
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     cfg = yaml.safe_load(f) or {}
                 ingestion_cfg = cfg.get("ingestion") or {}
+                force_fresh_run = bool(ingestion_cfg.get("force_fresh_run", False))
                 urls = ingestion_cfg.get("urls") or []
                 if isinstance(urls, list):
                     urls_text = "\n".join(urls)
@@ -60,6 +62,7 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
             urls_text=urls_text,
             sitemap_url=sitemap_url,
             css_selector=css_selector,
+            force_fresh_run=force_fresh_run,
             remote_protocol=remote_protocol,
             remote_host=remote_host,
             remote_port=remote_port,
@@ -115,6 +118,7 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
         raw_urls = request.form.get("urls", "") or ""
         sitemap_url = request.form.get("sitemap_url", "") or ""
         css_selector = request.form.get("css_selector", "") or ""
+        force_fresh_run_flag = bool(request.form.get("force_fresh_run"))
 
         # Remote source (FTP/FTPS/SFTP) inputs
         remote_protocol = (request.form.get("remote_protocol", "") or "").strip().lower()
@@ -202,6 +206,8 @@ def create_app(upload_token: str, project_dir: str) -> Flask:
             else:
                 # Clear remote_source if incomplete
                 ingestion_cfg["remote_source"] = None
+
+            ingestion_cfg["force_fresh_run"] = bool(force_fresh_run_flag)
 
             existing_cfg["ingestion"] = ingestion_cfg
 

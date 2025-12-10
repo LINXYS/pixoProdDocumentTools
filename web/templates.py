@@ -95,6 +95,15 @@ https://example.com/page-2">{{ urls_text or "" }}</textarea>
         </label>
       </div>
 
+      <hr>
+      <div style="margin:8px 0;">
+        <label>
+          <input type="checkbox" id="force_fresh_run" name="force_fresh_run"
+                 {% if force_fresh_run %}checked{% endif %} />
+          Force fresh run (ignore previous progress; database contents are preserved)
+        </label>
+      </div>
+
       <button type="submit">Start</button>
     </form>
     <hr>

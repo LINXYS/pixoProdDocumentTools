@@ -20,6 +20,16 @@ def main():
         logging.error(f"Could not load configuration: {e}")
         return
 
+    # Handle "force fresh run" for ingestion progress tracking only.
+    state_path = current_dir / "ingestion_state.json"
+    if getattr(config, "force_fresh_run", False):
+        if state_path.exists():
+            try:
+                state_path.unlink()
+                logging.info("Force fresh run: existing ingestion_state.json removed.")
+            except Exception as e:
+                logging.warning(f"Failed to remove ingestion_state.json: {e}")
+
     # Ensure files directory exists (used for uploads and remote sync)
     files_dir = current_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
@@ -36,12 +46,13 @@ def main():
             return
 
     # Create the main application instance.
-    app = DataIngestionApp(config=config, chunking_enabled=True)
+    app = DataIngestionApp(config=config, chunking_enabled=True, project_dir=current_dir)
 
-    # Register file loader
-    if files_dir.exists():
-        loader_docling = app.get_docling_loader(directory_path=files_dir)
-        app.register_loader(loader_docling)
+    # NOTE:
+    #  - Docling file ingestion is now driven internally by DataIngestionApp.ingest_data()
+    #    using batched Docling loaders (see get_docling_loaders).
+    #  - We no longer pre-register Docling loaders here; this allows multiple
+    #    Docling batches to be discovered and processed until all files are done.
 
     # Register URL Loader
     loader_websites = app.get_website_loader()

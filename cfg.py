@@ -32,7 +32,9 @@ DEFAULT_CONFIG = {
 # Defaults for ingestion-specific settings
 DEFAULT_INGESTION_CONFIG = {
     "urls": [],
+    "docling_batch_size": None,
     "sitemap_url": None,
+    "force_fresh_run": False,
     "css_selector": None,
     "site_root": None,
     "remote_source": None,
@@ -59,6 +61,7 @@ class IngestionConfig:
             llm_provider: str = "openai",
             collection_name: str = "documents",
             record_manager_db_url: str = None,
+            docling_batch_size: int | None = None,
             # Ingestion-specific settings
             urls: list | None = None,
             sitemap_url: str | None = None,
@@ -68,6 +71,7 @@ class IngestionConfig:
             max_workers: int | None = None,
             min_words: int | None = None,
             remote_source: dict | None = None,
+            force_fresh_run: bool = False,
     ):
         self.database_url = database_url
         self.chunk_size = chunk_size
@@ -79,6 +83,7 @@ class IngestionConfig:
         self.llm_provider = llm_provider
         self.collection_name = collection_name
         # Use the provided record_manager_db_url or default to the main database URL.
+        self.docling_batch_size = docling_batch_size
         self.record_manager_db_url = record_manager_db_url or database_url
 
         # Ingestion-specific
@@ -91,6 +96,7 @@ class IngestionConfig:
         self.min_words = min_words
         # Remote source configuration (FTP/FTPS/SFTP)
         self.remote_source = remote_source
+        self.force_fresh_run = bool(force_fresh_run)
 
     def __repr__(self):
         return (
@@ -100,6 +106,7 @@ class IngestionConfig:
             f"vector_size={self.vector_size}, "
             f"collection_name={self.collection_name}, "
             f"urls={len(self.urls)} URLs, "
+            f"docling_batch_size={getattr(self, 'docling_batch_size', None)}, "
             f"sitemap_url={self.sitemap_url}, "
             f"css_selector={self.css_selector}, "
             f"remote_source={'yes' if self.remote_source else 'no'}, "
@@ -192,6 +199,14 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     max_workers = ing.get("max_workers")
     min_words = ing.get("min_words")
     remote_source = ing.get("remote_source") or None
+    force_fresh_run = bool(ing.get("force_fresh_run", False))
+    # docling_batch_size can be configured either at top-level or under "ingestion"
+    # Prefer the ingestion section, but fall back to top-level if not present there.
+    docling_batch_size = ing.get("docling_batch_size")
+    if docling_batch_size is None:
+        docling_batch_size = cfg.get("docling_batch_size")
+
+    logging.info(f"Resolved docling_batch_size from config: {docling_batch_size!r}")
 
     print("Loaded collection_name:", collection_name)
 
@@ -216,6 +231,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         vector_size=vector_size,
         llm_provider=llm_provider,
         collection_name=collection_name,
+        docling_batch_size=docling_batch_size,
         record_manager_db_url=record_manager_db_url,
         # Ingestion-specific
         urls=urls,
@@ -226,6 +242,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         max_workers=max_workers,
         min_words=min_words,
         remote_source=remote_source,
+        force_fresh_run=force_fresh_run,
     )
     # Warn if an explicit vector_size disagrees with known defaults (OpenAI only)
     if embedding_provider.lower() == "openai":
