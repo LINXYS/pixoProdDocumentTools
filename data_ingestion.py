@@ -27,6 +27,19 @@ import shutil
 import warnings
 from ingestion_state import IngestionState
 
+DOCLING_SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".pptx",
+    ".xlsx",
+    ".html",
+    ".htm",
+    ".md",
+    ".adoc",
+    ".asciidoc",
+    ".txt",
+}
+
 # Local imports to avoid hard dependency if not used elsewhere
 try:
     from docling.chunking import HybridChunker
@@ -204,6 +217,7 @@ class DataIngestionApp:
                 break
 
             batch_round += 1
+            round_indexed_sources = 0
             logging.info(
                 f"Docling: starting round {batch_round} with "
                 f"{len(docling_loaders)} loader batch(es)."
@@ -212,12 +226,10 @@ class DataIngestionApp:
             for i, loader in enumerate(docling_loaders, start=1):
                 try:
                     # Expect loader to be configured with ExportType.DOC_CHUNKS and a Docling chunker.
-                    batch_files = getattr(loader, "file_path", None)
+                    batch_files = self._get_loader_batch_files(loader)
                     num_files = None
-                    if isinstance(batch_files, (list, tuple, set)):
+                    if batch_files:
                         num_files = len(batch_files)
-                    elif isinstance(batch_files, str):
-                        num_files = 1
 
                     logging.info(
                         f"Docling batch {i}/{len(docling_loaders)} in round {batch_round} "
@@ -259,8 +271,10 @@ class DataIngestionApp:
                             continue
 
                         try:
+                            self._apply_remote_source_metadata(parts, rel_key)
                             self.indexer.index_documents(parts, cleanup_mode="incremental")
                             self.state.mark_doc_file_done(rel_key)
+                            round_indexed_sources += 1
                             logging.info(
                                 f"Indexed Docling source {rel_key} with {len(parts)} chunk(s) "
                                 f"and marked done."
@@ -268,7 +282,22 @@ class DataIngestionApp:
                         except Exception as e:
                             logging.error(f"Indexing failed for Docling source {rel_key}: {e}")
                 except Exception as e:
-                    logging.error(f"Docling loader batch {i} in round {batch_round} failed: {e}")
+                    if batch_files:
+                        logging.error(
+                            f"Docling loader batch {i} in round {batch_round} failed for file(s): "
+                            f"{', '.join(batch_files)}. Error: {e}"
+                        )
+                    else:
+                        logging.error(f"Docling loader batch {i} in round {batch_round} failed: {e}")
+
+            if round_indexed_sources == 0 and docling_loaders:
+                logging.error(
+                    "Docling made no indexing progress in round %s. "
+                    "Stopping Docling rounds to avoid infinite retries. "
+                    "Inspect preceding batch errors for failing file paths.",
+                    batch_round,
+                )
+                break
 
         logging.info("Docling file ingestion complete. Proceeding with other loaders (if any).")
 
@@ -442,6 +471,25 @@ class DataIngestionApp:
         # Remove .pixodoc files (handled elsewhere)
         files = [f for f in files if os.path.splitext(f)[1].lower() != ".pixodoc"]
 
+        supported_files = []
+        skipped_unsupported = []
+        for f in files:
+            ext = Path(f).suffix.lower()
+            if ext in DOCLING_SUPPORTED_EXTENSIONS:
+                supported_files.append(f)
+            else:
+                skipped_unsupported.append(f)
+        files = supported_files
+        if skipped_unsupported:
+            preview = ", ".join(Path(p).name for p in skipped_unsupported[:10])
+            logging.warning(
+                "Docling: skipping %s unsupported file(s) by extension. "
+                "Supported extensions: %s. Examples: %s",
+                len(skipped_unsupported),
+                ", ".join(sorted(DOCLING_SUPPORTED_EXTENSIONS)),
+                preview,
+            )
+
         files_root = Path(directory_path)
 
         # Skip files that are already fully processed according to ingestion_state
@@ -508,7 +556,23 @@ class DataIngestionApp:
             batch_size = None
 
         if not batch_size or batch_size <= 0:
-            batch_size = len(files) if files else 0
+            # For remote-sync workflows, default to per-file batches so embeddings
+            # are indexed incrementally instead of only after a huge load() call.
+            if getattr(self.config, "remote_source", None):
+                batch_size = 1
+                logging.info(
+                    "Docling: docling_batch_size is unset; defaulting to 1 for remote source ingestion "
+                    "to index embeddings incrementally."
+                )
+            else:
+                batch_size = len(files) if files else 0
+                if batch_size > 1:
+                    logging.warning(
+                        "Docling: docling_batch_size is unset; processing %s files in one batch. "
+                        "Indexing starts only after conversion of that full batch. "
+                        "Set ingestion.docling_batch_size (e.g. 1-5) for earlier DB writes.",
+                        batch_size,
+                    )
 
         loaders: list[DoclingLoader] = []
         if not files:
@@ -594,6 +658,88 @@ class DataIngestionApp:
                 except Exception:
                     continue
         return None
+
+    def _get_loader_batch_files(self, loader: DoclingLoader) -> List[str]:
+        """
+        Best-effort extraction of current batch file paths from a Docling loader.
+        """
+        candidates = []
+        for attr in ("file_path", "file_paths", "_file_path", "_file_paths"):
+            try:
+                value = getattr(loader, attr, None)
+            except Exception:
+                value = None
+            if value is None:
+                continue
+            if isinstance(value, str):
+                candidates.append(value)
+            elif isinstance(value, (list, tuple, set)):
+                candidates.extend(str(v) for v in value if v)
+
+        seen = set()
+        ordered = []
+        for c in candidates:
+            s = str(c).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            ordered.append(s)
+        return ordered
+
+    def _apply_remote_source_metadata(self, docs: List[Document], rel_key: str) -> None:
+        """
+        Ensure Docling chunks use the remote source path (if available) instead of
+        a local filesystem path so source tracking/record-manager IDs are stable.
+        """
+        if rel_key.startswith("__unknown__/"):
+            return
+
+        try:
+            remote_source = self.state.get_remote_source(rel_key)
+        except Exception as e:
+            logging.exception(
+                "Failed to read remote source mapping for rel_key=%s. "
+                "Keeping original source metadata. Error: %s",
+                rel_key,
+                e,
+            )
+            return
+
+        if not remote_source:
+            if getattr(self.config, "remote_source", None):
+                logging.warning(
+                    "Remote source configured but no mapping found for rel_key=%s. "
+                    "Keeping original local source metadata.",
+                    rel_key,
+                )
+            return
+
+        updated = 0
+        for i, d in enumerate(docs, start=1):
+            try:
+                if not isinstance(d.metadata, dict):
+                    d.metadata = {}
+                d.metadata["source"] = remote_source
+                updated += 1
+            except Exception as e:
+                logging.exception(
+                    "Failed applying remote source metadata for rel_key=%s on chunk=%s/%s. "
+                    "Remote source=%s. Error: %s",
+                    rel_key,
+                    i,
+                    len(docs),
+                    remote_source,
+                    e,
+                )
+
+        if updated != len(docs):
+            logging.warning(
+                "Applied remote source metadata partially for rel_key=%s: "
+                "updated=%s, total=%s.",
+                rel_key,
+                updated,
+                len(docs),
+            )
 
     def _persist_docling_outputs(
             self,

@@ -194,6 +194,10 @@ def _sync_ftp_ftps(
                         local_item = dest_root / display_name
                         rel_key = _normalized_rel_key(local_item, local_root)
                         rel_key_raw = _raw_rel_key(local_item, local_root)
+                        remote_path_canonical = _canonical_remote_path(remote_item)
+                        if state:
+                            state.set_remote_source(rel_key, remote_path_canonical)
+                            state.set_remote_source(rel_key_raw, remote_path_canonical)
 
                         if is_dir:
                             if recursive:
@@ -276,6 +280,10 @@ def _sync_sftp(
                 else:
                     rel_key = _normalized_rel_key(local_item, local_root)
                     rel_key_raw = _raw_rel_key(local_item, local_root)
+                    remote_path_canonical = _canonical_remote_path(remote_item)
+                    if state:
+                        state.set_remote_source(rel_key, remote_path_canonical)
+                        state.set_remote_source(rel_key_raw, remote_path_canonical)
                     size = getattr(attr, "st_size", None)
                     mtime = getattr(attr, "st_mtime", None)
                     remote_fp = f"size={size};mtime={mtime}" if (size is not None or mtime is not None) else None
@@ -311,6 +319,21 @@ def _raw_rel_key(local_item: Path, local_root: Path) -> str:
     except Exception:
         rel = Path(local_item.name)
     return rel.as_posix()
+
+
+def _canonical_remote_path(remote_item: str) -> str:
+    path = (remote_item or "").strip().replace("\\", "/")
+    if not path:
+        return "/"
+    while "//" in path:
+        path = path.replace("//", "/")
+    if path.startswith("./"):
+        path = path[2:]
+    if path == ".":
+        path = ""
+    if not path.startswith("/"):
+        path = "/" + path
+    return path
 
 
 def _sha256_file(path: Path, buf_size: int = 1024 * 1024) -> str:

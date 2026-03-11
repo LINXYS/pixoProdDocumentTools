@@ -13,7 +13,8 @@ class IngestionState:
       "pixodoc_files": { "subdir/doc1.pixodoc": true, ... },
       "doc_files":     { "subdir/file1.pdf":   true, ... },
       "urls":          { "https://example/":   true, ... },
-      "file_fingerprints": { "subdir/file1.pdf": "size=123;modify=20260310091500", ... }
+      "file_fingerprints": { "subdir/file1.pdf": "size=123;modify=20260310091500", ... },
+      "remote_sources": { "subdir/file1.pdf": "/remote/path/file1.pdf", ... }
     }
     """
 
@@ -24,6 +25,7 @@ class IngestionState:
             "doc_files": {},
             "urls": {},
             "file_fingerprints": {},
+            "remote_sources": {},
         }
         self._load()
 
@@ -35,10 +37,10 @@ class IngestionState:
         try:
             with self.path.open("r", encoding="utf-8") as f:
                 raw = json.load(f) or {}
-            for key in ("pixodoc_files", "doc_files", "urls", "file_fingerprints"):
+            for key in ("pixodoc_files", "doc_files", "urls", "file_fingerprints", "remote_sources"):
                 section = raw.get(key) or {}
                 if isinstance(section, dict):
-                    if key == "file_fingerprints":
+                    if key in ("file_fingerprints", "remote_sources"):
                         self.data[key] = {str(k): str(v) for k, v in section.items()}
                     else:
                         self.data[key] = {str(k): bool(v) for k, v in section.items()}
@@ -98,4 +100,16 @@ class IngestionState:
 
     def set_file_fingerprint(self, rel_path: str, fingerprint: str) -> None:
         self.data["file_fingerprints"][rel_path] = fingerprint
+        self._save()
+
+    # --- local->remote source mapping -------------------------------------
+
+    def get_remote_source(self, rel_path: str) -> str | None:
+        return self.data["remote_sources"].get(rel_path)
+
+    def set_remote_source(self, rel_path: str, remote_path: str) -> None:
+        current = self.data["remote_sources"].get(rel_path)
+        if current == remote_path:
+            return
+        self.data["remote_sources"][rel_path] = remote_path
         self._save()
