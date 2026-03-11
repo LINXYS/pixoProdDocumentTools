@@ -1,0 +1,8 @@
+chunk_size: 1000
+chunk_overlap: 200
+use_chunking: true
+embedding_provider: openai
+embedding_model: text-embedding-3-large
+vector_size: null
+llm_provider: openai
+collection_name: kaffeeroesterei-05-10-2025-produkte

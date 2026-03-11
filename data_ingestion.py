@@ -377,20 +377,37 @@ class DataIngestionApp:
         device = AcceleratorDevice.AUTO
         torch_info = {}
         try:
-            import torch, subprocess, shutil
+            import torch
+
+            cuda_available = bool(torch.cuda.is_available())
+            mps_available = bool(
+                getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+            )
             torch_info = {
                 "torch_version": getattr(torch, "__version__", "?"),
                 "torch_cuda": getattr(torch.version, "cuda", None),
-                "cuda_available": torch.cuda.is_available(),
-                "cuda_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-                "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+                "cuda_available": cuda_available,
+                "cuda_count": torch.cuda.device_count() if cuda_available else 0,
+                "gpu_name": torch.cuda.get_device_name(0) if cuda_available else None,
+                "mps_available": mps_available,
+                "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
             }
-            if torch.cuda.is_available():
+
+            # Always prefer CUDA for Docling parsing whenever PyTorch sees a CUDA device.
+            if cuda_available:
+                try:
+                    torch.cuda.set_device(0)
+                except Exception as e:
+                    logging.warning(f"Failed to set CUDA device 0 explicitly: {e}")
                 device = AcceleratorDevice.CUDA
-            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            elif mps_available:
                 device = AcceleratorDevice.MPS
             else:
                 device = AcceleratorDevice.CPU
+                logging.warning(
+                    "Docling is using CPU because torch.cuda.is_available() is False. "
+                    "If a GPU is expected, verify CUDA drivers and a CUDA-enabled torch build."
+                )
         except Exception as e:
             logging.warning(f"PyTorch check failed; defaulting to AUTO. Error: {e}")
             device = AcceleratorDevice.AUTO

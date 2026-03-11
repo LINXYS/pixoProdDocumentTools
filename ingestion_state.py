@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Any
 
 
 class IngestionState:
@@ -12,16 +12,18 @@ class IngestionState:
     {
       "pixodoc_files": { "subdir/doc1.pixodoc": true, ... },
       "doc_files":     { "subdir/file1.pdf":   true, ... },
-      "urls":          { "https://example/":   true, ... }
+      "urls":          { "https://example/":   true, ... },
+      "file_fingerprints": { "subdir/file1.pdf": "size=123;modify=20260310091500", ... }
     }
     """
 
     def __init__(self, path: Path):
         self.path = Path(path)
-        self.data: Dict[str, Dict[str, bool]] = {
+        self.data: Dict[str, Dict[str, Any]] = {
             "pixodoc_files": {},
             "doc_files": {},
             "urls": {},
+            "file_fingerprints": {},
         }
         self._load()
 
@@ -33,10 +35,13 @@ class IngestionState:
         try:
             with self.path.open("r", encoding="utf-8") as f:
                 raw = json.load(f) or {}
-            for key in ("pixodoc_files", "doc_files", "urls"):
+            for key in ("pixodoc_files", "doc_files", "urls", "file_fingerprints"):
                 section = raw.get(key) or {}
                 if isinstance(section, dict):
-                    self.data[key] = {str(k): bool(v) for k, v in section.items()}
+                    if key == "file_fingerprints":
+                        self.data[key] = {str(k): str(v) for k, v in section.items()}
+                    else:
+                        self.data[key] = {str(k): bool(v) for k, v in section.items()}
             logging.info("Loaded ingestion state from %s", self.path)
         except Exception as e:
             logging.warning("Failed to load ingestion state from %s: %s. Starting fresh.", self.path, e)
@@ -58,6 +63,11 @@ class IngestionState:
         self.data["pixodoc_files"][rel_path] = True
         self._save()
 
+    def clear_pixodoc_done(self, rel_path: str) -> None:
+        if rel_path in self.data["pixodoc_files"]:
+            del self.data["pixodoc_files"][rel_path]
+            self._save()
+
     # --- doc files (Docling) ----------------------------------------------
 
     def is_doc_file_done(self, rel_path: str) -> bool:
@@ -67,6 +77,11 @@ class IngestionState:
         self.data["doc_files"][rel_path] = True
         self._save()
 
+    def clear_doc_file_done(self, rel_path: str) -> None:
+        if rel_path in self.data["doc_files"]:
+            del self.data["doc_files"][rel_path]
+            self._save()
+
     # --- URLs (website loader) --------------------------------------------
 
     def is_url_done(self, url: str) -> bool:
@@ -74,4 +89,13 @@ class IngestionState:
 
     def mark_url_done(self, url: str) -> None:
         self.data["urls"][url] = True
+        self._save()
+
+    # --- file fingerprints -------------------------------------------------
+
+    def get_file_fingerprint(self, rel_path: str) -> str | None:
+        return self.data["file_fingerprints"].get(rel_path)
+
+    def set_file_fingerprint(self, rel_path: str, fingerprint: str) -> None:
+        self.data["file_fingerprints"][rel_path] = fingerprint
         self._save()

@@ -3,10 +3,12 @@ from __future__ import annotations
 import ftplib
 import logging
 import socket
-import os
 import stat
+import hashlib
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+from ingestion_state import IngestionState
 
 
 def sync_remote_to_local(remote_cfg: Dict[str, Any], local_root: Path) -> None:
@@ -46,6 +48,7 @@ def sync_remote_to_local(remote_cfg: Dict[str, Any], local_root: Path) -> None:
 
     local_root = Path(local_root)
     local_root.mkdir(parents=True, exist_ok=True)
+    state = IngestionState(local_root.parent / "ingestion_state.json")
 
     logging.info(
         f"Starting remote sync: protocol={protocol}, host={host}, port={port}, "
@@ -65,6 +68,7 @@ def sync_remote_to_local(remote_cfg: Dict[str, Any], local_root: Path) -> None:
                 local_root=local_root,
                 passive=passive,
                 recursive=recursive,
+                state=state,
             )
         elif protocol == "sftp":
             _sync_sftp(
@@ -75,6 +79,7 @@ def sync_remote_to_local(remote_cfg: Dict[str, Any], local_root: Path) -> None:
                 remote_path=remote_path,
                 local_root=local_root,
                 recursive=recursive,
+                state=state,
             )
         else:
             raise RuntimeError(f"Unsupported remote protocol: {protocol}")
@@ -93,6 +98,7 @@ def _sync_ftp_ftps(
     local_root: Path,
     passive: bool = True,
     recursive: bool = True,
+    state: Optional[IngestionState] = None,
     connect_timeout: float = 30.0,
     op_timeout: float = 30.0,
 ) -> None:
@@ -138,45 +144,96 @@ def _sync_ftp_ftps(
 
             def walk_and_download(path: str, dest_root: Path) -> None:
                 logging.info(f"[FTP] Entering directory: {path}")
+                previous_pwd = None
                 try:
+                    previous_pwd = ftp.pwd()
                     ftp.cwd(path)
                 except ftplib.all_errors as e:
                     raise RuntimeError(f"Cannot change directory to {path!r}: {e}")
 
                 try:
-                    logging.info(f"[FTP] Listing directory: {path}")
-                    items = ftp.nlst()
-                except ftplib.all_errors as e:
-                    raise RuntimeError(f"Directory listing failed for {path!r}: {e}")
-
-                for name in items:
-                    if name in (".", ".."):
-                        continue
-                    is_dir = False
                     try:
-                        ftp.cwd(name)
-                        ftp.cwd("..")
-                        is_dir = True
-                    except ftplib.all_errors:
-                        is_dir = False
-
-                    remote_item = f"{path.rstrip('/')}/{name}"
-                    local_item = dest_root / name
-
-                    if is_dir:
-                        if recursive:
-                            local_item.mkdir(parents=True, exist_ok=True)
-                            walk_and_download(remote_item, local_item)
-                        else:
-                            logging.info(f"[FTP] Skipping subdirectory (recursive disabled): {remote_item}")
-                    else:
-                        local_item.parent.mkdir(parents=True, exist_ok=True)
-                        logging.info(f"[FTP] Downloading: {remote_item} -> {local_item}")
+                        logging.info(f"[FTP] Listing directory: {path}")
+                        entries = []
                         try:
-                            with open(local_item, "wb") as f:
-                                ftp.retrbinary(f"RETR {remote_item}", f.write)
-                        except ftplib.all_errors as e:
-                            raise RuntimeError(f"Failed to download {remote_item!r}: {e}")
+                            for name, facts in ftp.mlsd(facts=["type", "size", "modify"]):
+                                entries.append((name, facts or {}))
+                        except Exception:
+                            items = ftp.nlst()
+                            entries = [(name, {}) for name in items]
+                    except ftplib.all_errors as e:
+                        raise RuntimeError(f"Directory listing failed for {path!r}: {e}")
+
+                    for name, facts in entries:
+                        if name in (".", ".."):
+                            continue
+
+                        # nlst may return full paths; keep only terminal name for local paths.
+                        display_name = Path(name).name
+                        if display_name in (".", "..", ""):
+                            continue
+
+                        name_type = str((facts or {}).get("type") or "").lower()
+                        is_dir = False
+                        if name_type == "dir":
+                            is_dir = True
+                        elif name_type == "file":
+                            is_dir = False
+                        else:
+                            try:
+                                ftp.cwd(name)
+                                ftp.cwd("..")
+                                is_dir = True
+                            except ftplib.all_errors:
+                                is_dir = False
+
+                        if "/" in name or name.startswith(path.rstrip("/") + "/"):
+                            remote_item = name
+                        else:
+                            remote_item = f"{path.rstrip('/')}/{name}"
+                        local_item = dest_root / display_name
+                        rel_key = _normalized_rel_key(local_item, local_root)
+                        rel_key_raw = _raw_rel_key(local_item, local_root)
+
+                        if is_dir:
+                            if recursive:
+                                local_item.mkdir(parents=True, exist_ok=True)
+                                walk_and_download(remote_item, local_item)
+                            else:
+                                logging.info(f"[FTP] Skipping subdirectory (recursive disabled): {remote_item}")
+                        else:
+                            remote_fp = _ftp_remote_fingerprint(
+                                ftp=ftp,
+                                remote_item=remote_item,
+                                size_hint=(facts or {}).get("size"),
+                                modify_hint=(facts or {}).get("modify"),
+                            )
+                            previous_fp = state.get_file_fingerprint(rel_key) if state else None
+                            if remote_fp and previous_fp == remote_fp and local_item.exists():
+                                logging.info(f"[FTP] Unchanged, skipping download: {remote_item}")
+                                continue
+
+                            local_item.parent.mkdir(parents=True, exist_ok=True)
+                            logging.info(f"[FTP] Downloading: {remote_item} -> {local_item}")
+                            try:
+                                with open(local_item, "wb") as f:
+                                    ftp.retrbinary(f"RETR {remote_item}", f.write)
+                                if state:
+                                    final_fp = remote_fp or f"sha256:{_sha256_file(local_item)}"
+                                    state.set_file_fingerprint(rel_key, final_fp)
+                                    state.clear_doc_file_done(rel_key)
+                                    state.clear_doc_file_done(rel_key_raw)
+                                    if rel_key.endswith(".pixodoc"):
+                                        state.clear_pixodoc_done(rel_key)
+                                        state.clear_pixodoc_done(rel_key_raw)
+                            except ftplib.all_errors as e:
+                                raise RuntimeError(f"Failed to download {remote_item!r}: {e}")
+                finally:
+                    if previous_pwd is not None:
+                        try:
+                            ftp.cwd(previous_pwd)
+                        except ftplib.all_errors:
+                            pass
 
             walk_and_download(remote_path, local_root)
             logging.info("[FTP] Sync completed successfully.")
@@ -193,6 +250,7 @@ def _sync_sftp(
     remote_path: str,
     local_root: Path,
     recursive: bool = True,
+    state: Optional[IngestionState] = None,
 ) -> None:
     try:
         import paramiko
@@ -216,10 +274,83 @@ def _sync_sftp(
                         local_item.mkdir(parents=True, exist_ok=True)
                         walk_and_download(remote_item, local_item)
                 else:
+                    rel_key = _normalized_rel_key(local_item, local_root)
+                    rel_key_raw = _raw_rel_key(local_item, local_root)
+                    size = getattr(attr, "st_size", None)
+                    mtime = getattr(attr, "st_mtime", None)
+                    remote_fp = f"size={size};mtime={mtime}" if (size is not None or mtime is not None) else None
+                    previous_fp = state.get_file_fingerprint(rel_key) if state else None
+                    if remote_fp and previous_fp == remote_fp and local_item.exists():
+                        logging.info(f"SFTP unchanged, skipping download: {remote_item}")
+                        continue
+
                     local_item.parent.mkdir(parents=True, exist_ok=True)
                     logging.info(f"Downloading SFTP file: {remote_item} -> {local_item}")
                     sftp.get(remote_item, str(local_item))
+                    if state:
+                        final_fp = remote_fp or f"sha256:{_sha256_file(local_item)}"
+                        state.set_file_fingerprint(rel_key, final_fp)
+                        state.clear_doc_file_done(rel_key)
+                        state.clear_doc_file_done(rel_key_raw)
+                        if rel_key.endswith(".pixodoc"):
+                            state.clear_pixodoc_done(rel_key)
+                            state.clear_pixodoc_done(rel_key_raw)
 
         walk_and_download(remote_path, local_root)
     finally:
         transport.close()
+
+
+def _normalized_rel_key(local_item: Path, local_root: Path) -> str:
+    return _raw_rel_key(local_item, local_root).lower()
+
+
+def _raw_rel_key(local_item: Path, local_root: Path) -> str:
+    try:
+        rel = local_item.resolve().relative_to(local_root.resolve())
+    except Exception:
+        rel = Path(local_item.name)
+    return rel.as_posix()
+
+
+def _sha256_file(path: Path, buf_size: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(buf_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _ftp_remote_fingerprint(
+    ftp: ftplib.FTP,
+    remote_item: str,
+    size_hint: Any = None,
+    modify_hint: Any = None,
+) -> Optional[str]:
+    size = str(size_hint).strip() if size_hint not in (None, "") else None
+    modify = str(modify_hint).strip() if modify_hint not in (None, "") else None
+
+    if size is None:
+        try:
+            s = ftp.size(remote_item)
+            if s is not None:
+                size = str(s)
+        except Exception:
+            size = None
+
+    if modify is None:
+        try:
+            # Typical response: "213 20260310101230"
+            resp = ftp.sendcmd(f"MDTM {remote_item}")
+            parts = str(resp).split()
+            if parts and parts[0] == "213" and len(parts) > 1:
+                modify = parts[1].strip()
+        except Exception:
+            modify = None
+
+    if size is None and modify is None:
+        return None
+    return f"size={size or ''};modify={modify or ''}"
