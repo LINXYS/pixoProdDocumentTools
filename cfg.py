@@ -38,6 +38,7 @@ DEFAULT_INGESTION_CONFIG = {
     "css_selector": None,
     "site_root": None,
     "remote_source": None,
+    "website_index_max_retries": 3,
 }
 
 class IngestionConfig:
@@ -72,6 +73,7 @@ class IngestionConfig:
             min_words: int | None = None,
             remote_source: dict | None = None,
             force_fresh_run: bool = False,
+            website_index_max_retries: int = 3,
     ):
         self.database_url = database_url
         self.chunk_size = chunk_size
@@ -97,6 +99,10 @@ class IngestionConfig:
         # Remote source configuration (FTP/FTPS/SFTP)
         self.remote_source = remote_source
         self.force_fresh_run = bool(force_fresh_run)
+        try:
+            self.website_index_max_retries = max(0, int(website_index_max_retries))
+        except Exception:
+            self.website_index_max_retries = 3
 
     def __repr__(self):
         return (
@@ -200,6 +206,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     min_words = ing.get("min_words")
     remote_source = ing.get("remote_source") or None
     force_fresh_run = bool(ing.get("force_fresh_run", False))
+    website_index_max_retries = ing.get("website_index_max_retries", 3)
     # docling_batch_size can be configured either at top-level or under "ingestion"
     # Prefer the ingestion section, but fall back to top-level if not present there.
     docling_batch_size = ing.get("docling_batch_size")
@@ -243,6 +250,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         min_words=min_words,
         remote_source=remote_source,
         force_fresh_run=force_fresh_run,
+        website_index_max_retries=website_index_max_retries,
     )
     # Warn if an explicit vector_size disagrees with known defaults (OpenAI only)
     if embedding_provider.lower() == "openai":

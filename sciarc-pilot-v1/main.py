@@ -4,7 +4,6 @@ from pathlib import Path
 from cfg import load_config
 from data_ingestion import DataIngestionApp
 from remote_sync import sync_remote_to_local
-import krb_xml_loader
 
 
 def main():
@@ -54,10 +53,6 @@ def main():
     #    using batched Docling loaders (see get_docling_loaders).
     #  - We no longer pre-register Docling loaders here; this allows multiple
     #    Docling batches to be discovered and processed until all files are done.
-
-    #Register KRB Loader
-    krb_loader = krb_xml_loader.KRBXMLLoader(url="https://shop.berliner-kaffeeroesterei.de/store-api/product-export/SWPECGDTAFZKOUVONDGXQ0DDWA/pixioGoogle.xml")
-    app.register_loader(krb_loader)
 
     # Register URL Loader
     loader_websites = app.get_website_loader()

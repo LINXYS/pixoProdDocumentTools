@@ -10,7 +10,7 @@ import json
 from os.path import join
 from pathlib import Path
 from typing import List, Optional
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
@@ -326,8 +326,13 @@ class DataIngestionApp:
                         url_groups[str(url)].append(d)
 
                     splitter = self.get_token_splitter() if self.config.use_chunking else None
+                    max_retries = max(0, int(getattr(self.config, "website_index_max_retries", 3) or 0))
+                    retry_counts: dict[str, int] = defaultdict(int)
+                    pending_urls = deque(url_groups.keys())
 
-                    for url, docs_for_url in url_groups.items():
+                    while pending_urls:
+                        url = pending_urls.popleft()
+                        docs_for_url = url_groups[url]
                         if url != "__unknown__" and self.state.is_url_done(url):
                             logging.info(f"Skipping URL (already processed): {url}")
                             continue
@@ -359,7 +364,19 @@ class DataIngestionApp:
                                 f"Indexed website URL {url} with {len(docs_to_index)} document(s)/chunk(s)."
                             )
                         except Exception as e:
-                            logging.error(f"Indexing failed for website URL {url}: {e}")
+                            retry_counts[url] += 1
+                            attempt = retry_counts[url]
+                            if attempt <= max_retries:
+                                logging.error(
+                                    f"Indexing failed for website URL {url} (attempt {attempt}/"
+                                    f"{max_retries + 1}): {e}. Re-queueing for retry."
+                                )
+                                pending_urls.append(url)
+                            else:
+                                logging.error(
+                                    f"Indexing failed for website URL {url} after "
+                                    f"{max_retries + 1} attempts: {e}"
+                                )
 
                 else:
                     # Other loaders: process in one shot (no resume tracking)

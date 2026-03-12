@@ -11,6 +11,7 @@ __pycache__/
 
 **/files/
 **/api_url.txt
+**/config.yaml
 
 logs
 *.log
