@@ -420,8 +420,17 @@ class DataIngestionApp:
         from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
-        device = AcceleratorDevice.AUTO
+        requested = (os.getenv("PIXO_ACCELERATOR") or "cpu").strip().lower()
+        if requested == "gpu":
+            requested = "cuda"
+        if requested not in {"cpu", "auto", "cuda", "mps"}:
+            logging.warning("Unknown PIXO_ACCELERATOR=%r; using CPU.", requested)
+            requested = "cpu"
+
+        device = AcceleratorDevice.CPU
         torch_info = {}
+        cuda_available = False
+        mps_available = False
         try:
             import torch
 
@@ -439,7 +448,29 @@ class DataIngestionApp:
                 "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
             }
 
-            # Always prefer CUDA for Docling parsing whenever PyTorch sees a CUDA device.
+        except Exception as e:
+            logging.warning(f"PyTorch check failed; using CPU. Error: {e}")
+
+        if requested == "cpu":
+            device = AcceleratorDevice.CPU
+            logging.info("Docling accelerator forced to CPU by PIXO_ACCELERATOR=cpu.")
+        elif requested == "cuda":
+            if cuda_available:
+                try:
+                    torch.cuda.set_device(0)
+                except Exception as e:
+                    logging.warning(f"Failed to set CUDA device 0 explicitly: {e}")
+                device = AcceleratorDevice.CUDA
+            else:
+                device = AcceleratorDevice.CPU
+                logging.warning("PIXO_ACCELERATOR=cuda requested, but CUDA is not available. Falling back to CPU.")
+        elif requested == "mps":
+            if mps_available:
+                device = AcceleratorDevice.MPS
+            else:
+                device = AcceleratorDevice.CPU
+                logging.warning("PIXO_ACCELERATOR=mps requested, but MPS is not available. Falling back to CPU.")
+        else:
             if cuda_available:
                 try:
                     torch.cuda.set_device(0)
@@ -451,17 +482,14 @@ class DataIngestionApp:
             else:
                 device = AcceleratorDevice.CPU
                 logging.warning(
-                    "Docling is using CPU because torch.cuda.is_available() is False. "
-                    "If a GPU is expected, verify CUDA drivers and a CUDA-enabled torch build."
+                    "Docling is using CPU because no supported accelerator is visible. "
+                    "For Docker GPU mode, start with docker-compose.gpu.yml and a CUDA-enabled torch build."
                 )
-        except Exception as e:
-            logging.warning(f"PyTorch check failed; defaulting to AUTO. Error: {e}")
-            device = AcceleratorDevice.AUTO
 
         logging.info(f"Docling/torch info: {torch_info}")
         logging.info(f"Docling accelerator set to: {getattr(device, 'name', device)}")
 
-        accel = AcceleratorOptions(num_threads=min(os.cpu_count(), 8), device=device)
+        accel = AcceleratorOptions(num_threads=min(os.cpu_count() or 1, 8), device=device)
         pdf_opts = PdfPipelineOptions()
         pdf_opts.accelerator_options = accel
 

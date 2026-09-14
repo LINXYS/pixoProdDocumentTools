@@ -1,6 +1,7 @@
 import os
 import subprocess
 import platform
+import sys
 from io import BytesIO
 import pyzipper
 import rarfile
@@ -63,6 +64,46 @@ def run_script(project_directory, upload_token):
         web_directory = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.abspath(os.path.join(web_directory, os.pardir))
         test_folder = project_directory
+
+        if os.getenv("PIXO_DOCKER") == "1":
+            if os.path.isabs(project_directory):
+                project_path = project_directory
+            else:
+                project_path = os.path.join(project_root, test_folder)
+            project_path = os.path.abspath(project_path)
+            script_path = os.path.join(project_path, "main.py")
+            cmd = [sys.executable, "-u", script_path]
+
+            def generate_docker():
+                yield "<html><head><title>Main Script Output</title></head><body><pre>\n"
+                env = os.environ.copy()
+                env.setdefault("PYTHONUNBUFFERED", "1")
+                python_paths = [project_path, project_root]
+                if env.get("PYTHONPATH"):
+                    python_paths.append(env["PYTHONPATH"])
+                env["PYTHONPATH"] = os.pathsep.join(python_paths)
+
+                with subprocess.Popen(
+                    cmd,
+                    cwd=project_path,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                ) as proc:
+                    for line in proc.stdout:
+                        yield line
+                    proc.wait()
+                yield "</pre>\n"
+                yield f"<button onclick=\"window.location.href='/?token={upload_token}'\">Back</button>\n"
+                yield "</body></html>\n"
+
+            return Response(
+                stream_with_context(generate_docker()),
+                mimetype="text/html",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         if platform.system() == "Windows":
             # Windows: stream via pipes (no PTY available)
