@@ -31,13 +31,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
+COPY docker/filter_requirements.py /tmp/filter_requirements.py
 
 RUN python -m pip install --upgrade pip setuptools wheel \
-    && python -m pip install --index-url "${PYTORCH_INDEX_URL}" \
+    && python -m pip install --index-url "${PYTORCH_INDEX_URL}" --extra-index-url https://pypi.org/simple \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
-    && sed '/^torch==/d; /^torchvision==/d; /^pywin32==/d; /^python-magic-bin==/d; /^pyreadline3==/d' \
-        /app/requirements.txt > /tmp/requirements-docker.txt \
+    && python /tmp/filter_requirements.py /app/requirements.txt /tmp/requirements-docker.txt \
     && python -m pip install -r /tmp/requirements-docker.txt
 
 COPY . /app

@@ -1,0 +1,88 @@
+x-gpu-deploy: &gpu-deploy
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+
+services:
+  produkte-worker:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  site-worker:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  ftp-worker:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  sciarc-worker:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  produkte-web:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  site-web:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  ftp-web:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  sciarc-web:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy

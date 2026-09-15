@@ -4,13 +4,13 @@ This deployment is CPU-first and VM-friendly by default. One shared image is bui
 
 ## Default CPU Deployment
 
-Create a runtime env file on a fresh VM:
+Create a runtime env file on a fresh VM when Docker should also start Postgres:
 
 ```bash
 cp .env.docker.example .env
 ```
 
-If `.env` already exists, keep it and add or adjust the Docker values from `.env.docker.example`. Fill in `POSTGRES_PASSWORD` and any API keys needed by the configured embedding provider.
+If `.env` already exists, keep it and add or adjust the Docker values from `.env.docker.example`. Fill in `POSTGRES_PASSWORD` for the local Postgres container and `OPENAI_API_KEY` for OpenAI embeddings.
 
 Start Postgres and all scheduled project workers:
 
@@ -65,6 +65,17 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 ```
 
 The override switches `PIXO_ACCELERATOR=auto`, requests all GPUs, and builds PyTorch from the CUDA 12.8 wheel index. If CUDA is not visible inside the container, the application falls back to CPU.
+
+## Existing Postgres
+
+For deployments where Postgres already exists, use `.env.external-db.example` and `docker-compose.external-db.yml`. That file supports every project service; start only the service you want, for example:
+
+```bash
+docker compose -f docker-compose.external-db.yml up -d --build sciarc-worker
+```
+
+FTP/FTPS/SFTP settings are not Docker-specific. They stay in each project's mounted `config.yaml` under `ingestion.remote_source`, exactly as the existing code already reads them. For a DigitalOcean VM deployment of `sciarc-pilot-v1`, follow `DIGITALOCEAN_SCIARC_DEPLOY.md`.
+
 
 ## Useful Commands
 

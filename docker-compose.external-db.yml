@@ -1,4 +1,4 @@
-name: pixo-document-tools
+name: pixo-document-tools-external-db
 
 x-app-build: &app-build
   context: .
@@ -9,17 +9,14 @@ x-app-env: &app-env
   INGESTION_INTERVAL_SECONDS: ${INGESTION_INTERVAL_SECONDS:-3600}
   RUN_ON_START: ${RUN_ON_START:-true}
   DB_WAIT_TIMEOUT_SECONDS: ${DB_WAIT_TIMEOUT_SECONDS:-120}
-  DATABASE_URL: postgresql://pixo:${POSTGRES_PASSWORD:-pixo_change_me}@db:5432/vectorstore
-  RECORD_MANAGER_DATABASE_URL: postgresql://pixo:${POSTGRES_PASSWORD:-pixo_change_me}@db:5432/record_manager
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must point to the existing vector database}
+  RECORD_MANAGER_DATABASE_URL: ${RECORD_MANAGER_DATABASE_URL:?RECORD_MANAGER_DATABASE_URL must point to the existing record-manager database}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
 
 x-worker-common: &worker-common
   build: *app-build
   image: pixo-document-tools:runtime
   restart: unless-stopped
-  depends_on:
-    db:
-      condition: service_healthy
   command: ["schedule"]
 
 x-web-common: &web-common
@@ -27,30 +24,9 @@ x-web-common: &web-common
   image: pixo-document-tools:runtime
   restart: unless-stopped
   profiles: ["dev"]
-  depends_on:
-    db:
-      condition: service_healthy
   command: ["server"]
 
 services:
-  db:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: pixo
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pixo_change_me}
-      POSTGRES_DB: postgres
-      VECTOR_DB: vectorstore
-      RECORD_MANAGER_DB: record_manager
-    volumes:
-      - pixo-postgres-data:/var/lib/postgresql/data
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-
   produkte-worker:
     <<: *worker-common
     environment:
@@ -126,6 +102,3 @@ services:
       - "5004:5000"
     volumes:
       - ./sciarc-pilot-v1:/app/sciarc-pilot-v1
-
-volumes:
-  pixo-postgres-data:
