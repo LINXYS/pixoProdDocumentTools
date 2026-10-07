@@ -26,6 +26,13 @@ import os
 import shutil
 import warnings
 from ingestion_state import IngestionState
+from content_types import (
+    base_metadata,
+    match_rule,
+    parse_content_rules,
+    parse_structured_file,
+    uses_structured_parser,
+)
 
 DOCLING_SUPPORTED_EXTENSIONS = {
     ".pdf",
@@ -80,6 +87,7 @@ class DataIngestionApp:
         self.project_dir = Path(project_dir or Path.cwd())
         state_path = self.project_dir / "ingestion_state.json"
         self.state = ingestion_state or IngestionState(state_path)
+        self.content_rules = parse_content_rules(getattr(config, "content_types", None))
         logging.info(
             f"DataIngestionApp initialized with docling_batch_size="
             f"{getattr(self.config, 'docling_batch_size', None)!r}"
@@ -208,6 +216,9 @@ class DataIngestionApp:
         # Canonical root for all doc files (used for state keys)
         files_dir = Path.cwd() / "files"
 
+        # ---------- Structured files (content_types rules with a parser) ----------
+        self._ingest_structured_files(files_dir)
+
         # ---------- Process Docling file batches until all files are done ----------
         batch_round = 0
         while True:
@@ -272,6 +283,7 @@ class DataIngestionApp:
 
                         try:
                             self._apply_remote_source_metadata(parts, rel_key)
+                            self._apply_content_metadata(parts, rel_key)
                             self.indexer.index_documents(parts, cleanup_mode="incremental")
                             self.state.mark_doc_file_done(rel_key)
                             round_indexed_sources += 1
@@ -516,6 +528,26 @@ class DataIngestionApp:
         # Remove .pixodoc files (handled elsewhere)
         files = [f for f in files if os.path.splitext(f)[1].lower() != ".pixodoc"]
 
+        files_root = Path(directory_path)
+
+        # Remove files handled by a structured content parser (see _ingest_structured_files)
+        files = [
+            f for f in files
+            if not uses_structured_parser(
+                match_rule(self.content_rules, self._normalize_doc_rel_path(Path(f), files_root)), Path(f)
+            )
+        ]
+
+        # Empty files cannot be converted and would be retried on every run
+        empty_files = [f for f in files if os.path.getsize(f) == 0]
+        if empty_files:
+            logging.warning(
+                "Docling: skipping %s empty file(s): %s",
+                len(empty_files),
+                ", ".join(Path(p).name for p in empty_files),
+            )
+            files = [f for f in files if f not in set(empty_files)]
+
         supported_files = []
         skipped_unsupported = []
         for f in files:
@@ -534,8 +566,6 @@ class DataIngestionApp:
                 ", ".join(sorted(DOCLING_SUPPORTED_EXTENSIONS)),
                 preview,
             )
-
-        files_root = Path(directory_path)
 
         # Skip files that are already fully processed according to ingestion_state
         remaining_files = []
@@ -785,6 +815,77 @@ class DataIngestionApp:
                 updated,
                 len(docs),
             )
+
+    def _apply_content_metadata(self, docs: List[Document], rel_key: str) -> None:
+        """
+        Tag chunks with folder-based content metadata (content_type, is_evidence,
+        title, year, link) from the project's content_types rules.
+        """
+        if not self.content_rules or rel_key.startswith("__unknown__/"):
+            return
+        rule = match_rule(self.content_rules, rel_key)
+        if rule is None:
+            logging.warning("No content_types rule matches %s; chunks get no content_type.", rel_key)
+            return
+        # rel_key is lowercased; prefer the original file name from the remote mapping
+        remote_source = self.state.get_remote_source(rel_key) or rel_key
+        meta = base_metadata(rule, Path(remote_source).name)
+        for d in docs:
+            if not isinstance(d.metadata, dict):
+                d.metadata = {}
+            d.metadata.update(meta)
+
+    def _ingest_structured_files(self, files_dir: Path) -> None:
+        """
+        Parse and index .docx files covered by a content_types rule with a parser
+        (e.g. webcast transcripts with embed code, linked education items). These
+        bypass Docling so that links/embed codes become metadata instead of text.
+        """
+        if not any(r.parser for r in self.content_rules):
+            return
+
+        candidates = [Path(f) for f in glob.glob(join(files_dir, "**/*.docx"), recursive=True)]
+        splitter = self.get_token_splitter() if self.config.use_chunking else None
+        processed = 0
+
+        for path in sorted(candidates):
+            rel_key = self._normalize_doc_rel_path(path, files_dir)
+            rule = match_rule(self.content_rules, rel_key)
+            if not uses_structured_parser(rule, path):
+                continue
+            if self.state.is_doc_file_done(rel_key):
+                logging.info(f"Skipping structured file (already processed): {rel_key}")
+                continue
+
+            try:
+                item = parse_structured_file(path, rule)
+                remote_source = self.state.get_remote_source(rel_key)
+                if remote_source:
+                    item.metadata["file_name"] = Path(remote_source).name
+                item.metadata["source"] = remote_source or str(path)
+
+                body = item.body.strip()
+                parts = splitter.split_text(body) if (splitter and body) else ([body] if body else [])
+                if not parts:
+                    parts = [""]
+                docs = [
+                    Document(
+                        page_content=f"{item.header}\n\n{p}".strip(),
+                        metadata={**item.metadata, "chunk_index": i},
+                    )
+                    for i, p in enumerate(parts)
+                ]
+                self.indexer.index_documents(docs, cleanup_mode="incremental")
+                self.state.mark_doc_file_done(rel_key)
+                processed += 1
+                logging.info(
+                    f"Indexed structured file {rel_key} ({rule.content_type}, parser={rule.parser}) "
+                    f"with {len(docs)} chunk(s) and marked done."
+                )
+            except Exception as e:
+                logging.error(f"Structured ingestion failed for {rel_key}: {e}")
+
+        logging.info(f"Structured file ingestion complete: {processed} file(s) indexed.")
 
     def _persist_docling_outputs(
             self,

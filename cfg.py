@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "vector_size": None,  # None => auto-resolve for OpenAI in load_config
     "llm_provider": "openai",
     "collection_name": "documents",
+    "metadata_columns": [],
 }
 
 # Defaults for ingestion-specific settings
@@ -39,6 +40,7 @@ DEFAULT_INGESTION_CONFIG = {
     "site_root": None,
     "remote_source": None,
     "website_index_max_retries": 3,
+    "content_types": [],
 }
 
 class IngestionConfig:
@@ -63,6 +65,7 @@ class IngestionConfig:
             collection_name: str = "documents",
             record_manager_db_url: str = None,
             docling_batch_size: int | None = None,
+            metadata_columns: list | None = None,
             # Ingestion-specific settings
             urls: list | None = None,
             sitemap_url: str | None = None,
@@ -74,6 +77,7 @@ class IngestionConfig:
             remote_source: dict | None = None,
             force_fresh_run: bool = False,
             website_index_max_retries: int = 3,
+            content_types: list | None = None,
     ):
         self.database_url = database_url
         self.chunk_size = chunk_size
@@ -87,6 +91,8 @@ class IngestionConfig:
         # Use the provided record_manager_db_url or default to the main database URL.
         self.docling_batch_size = docling_batch_size
         self.record_manager_db_url = record_manager_db_url or database_url
+        # Metadata keys stored as dedicated (filterable) table columns, e.g. ["content_type"]
+        self.metadata_columns = list(metadata_columns or [])
 
         # Ingestion-specific
         self.urls = urls or []
@@ -103,6 +109,8 @@ class IngestionConfig:
             self.website_index_max_retries = max(0, int(website_index_max_retries))
         except Exception:
             self.website_index_max_retries = 3
+        # Folder-based content classification rules (see content_types.py)
+        self.content_types = list(content_types or [])
 
     def __repr__(self):
         return (
@@ -116,6 +124,8 @@ class IngestionConfig:
             f"sitemap_url={self.sitemap_url}, "
             f"css_selector={self.css_selector}, "
             f"remote_source={'yes' if self.remote_source else 'no'}, "
+            f"content_types={len(self.content_types)} rule(s), "
+            f"metadata_columns={self.metadata_columns}, "
             f"record_manager_db_url={self.record_manager_db_url})"
         )
 
@@ -207,6 +217,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     remote_source = ing.get("remote_source") or None
     force_fresh_run = bool(ing.get("force_fresh_run", False))
     website_index_max_retries = ing.get("website_index_max_retries", 3)
+    content_types = ing.get("content_types") or []
+    metadata_columns = cfg.get("metadata_columns") or []
     # docling_batch_size can be configured either at top-level or under "ingestion"
     # Prefer the ingestion section, but fall back to top-level if not present there.
     docling_batch_size = ing.get("docling_batch_size")
@@ -240,6 +252,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         collection_name=collection_name,
         docling_batch_size=docling_batch_size,
         record_manager_db_url=record_manager_db_url,
+        metadata_columns=metadata_columns,
         # Ingestion-specific
         urls=urls,
         sitemap_url=sitemap_url,
@@ -251,6 +264,7 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         remote_source=remote_source,
         force_fresh_run=force_fresh_run,
         website_index_max_retries=website_index_max_retries,
+        content_types=content_types,
     )
     # Warn if an explicit vector_size disagrees with known defaults (OpenAI only)
     if embedding_provider.lower() == "openai":

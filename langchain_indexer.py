@@ -16,7 +16,7 @@ from langchain_core.indexing import index
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-from langchain_postgres import PGEngine, PGVectorStore
+from langchain_postgres import Column, PGEngine, PGVectorStore
 
 from cfg import IngestionConfig
 
@@ -89,10 +89,15 @@ class LangChainIndexer:
             except Exception:
                 pass
 
+        # Optional metadata keys stored as dedicated columns ("name" or "name:SQLTYPE", default TEXT)
+        # so they can be used in vectorstore filters. Only applies when the table is created.
+        metadata_columns = self._parse_metadata_columns(getattr(config, "metadata_columns", None))
+
         try:
             self.pg_engine.init_vectorstore_table(
                 table_name=self.table_name,
                 vector_size=vector_size,
+                metadata_columns=metadata_columns,
             )
         except ProgrammingError as e:
             if _is_duplicate_table_error(e):
@@ -105,6 +110,7 @@ class LangChainIndexer:
             engine=self.pg_engine,
             table_name=self.table_name,
             embedding_service=self.embedding,
+            metadata_columns=[c.name for c in metadata_columns] or None,
         )
 
         # 5) Record manager (make engine robust)
@@ -152,6 +158,16 @@ class LangChainIndexer:
         )
         logging.info("Indexing result: %s", result)
         return result
+
+    @staticmethod
+    def _parse_metadata_columns(raw) -> List[Column]:
+        columns: List[Column] = []
+        for entry in raw or []:
+            name, _, data_type = str(entry).partition(":")
+            name = name.strip()
+            if name:
+                columns.append(Column(name, (data_type.strip() or "TEXT").upper()))
+        return columns
 
     @staticmethod
     def _ensure_psycopg_scheme(url: str) -> str:

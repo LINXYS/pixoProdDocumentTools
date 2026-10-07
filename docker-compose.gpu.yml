@@ -47,6 +47,16 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     deploy: *gpu-deploy
 
+  hypertonie-worker:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
   produkte-web:
     build:
       args:
@@ -78,6 +88,16 @@ services:
     deploy: *gpu-deploy
 
   sciarc-web:
+    build:
+      args:
+        PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    environment:
+      PIXO_ACCELERATOR: auto
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy: *gpu-deploy
+
+  hypertonie-web:
     build:
       args:
         PYTORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
