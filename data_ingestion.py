@@ -885,6 +885,7 @@ class DataIngestionApp:
                     page = pdf[page_no]
                     textpage = page.get_textpage()
                     try:
+                        width, height = page.get_size()
                         text = textpage.get_text_range().replace("\r\n", "\n")
                         # pdfium marks soft hyphens at line ends as U+FFFE: rejoin the word
                         text = text.replace("￾\n", "").replace("￾", "").strip()
@@ -892,9 +893,31 @@ class DataIngestionApp:
                         textpage.close()
                         page.close()
                     if text:
+                        # Same page structure Docling chunks carry (dl_meta.doc_items[].prov[].page_no),
+                        # so consumers resolve page numbers / #page=N links identically.
+                        dl_meta = {
+                            "schema_name": "docling_core.transforms.chunker.DocMeta",
+                            "version": "1.0.0",
+                            "doc_items": [{
+                                "self_ref": f"#/texts/{page_no}",
+                                "label": "text",
+                                "prov": [{
+                                    "page_no": page_no + 1,
+                                    "bbox": {"l": 0.0, "t": float(height), "r": float(width), "b": 0.0,
+                                             "coord_origin": "BOTTOMLEFT"},
+                                    "charspan": [0, len(text)],
+                                }],
+                            }],
+                            "origin": {"mimetype": "application/pdf", "filename": path.name},
+                        }
                         page_docs.append(Document(
                             page_content=text,
-                            metadata={"source": str(path), "page": page_no + 1, "extraction": "pdf_text_fallback"},
+                            metadata={
+                                "source": str(path),
+                                "page": page_no + 1,
+                                "dl_meta": dl_meta,
+                                "extraction": "pdf_text_fallback",
+                            },
                         ))
             finally:
                 pdf.close()
