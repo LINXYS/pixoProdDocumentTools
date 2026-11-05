@@ -253,9 +253,9 @@ class DataIngestionApp:
                         f"Docling batch {i}/{len(docling_loaders)} in round {batch_round} "
                         f"finished load() with {len(docs) if docs else 0} document(s)."
                     )
+                    docs = docs or []
                     if not docs:
                         logging.info(f"{loader.__class__.__name__} returned no documents.")
-                        continue
 
                     # Group Docling docs by original source path and index per source
                     grouped = defaultdict(list)
@@ -293,6 +293,20 @@ class DataIngestionApp:
                             )
                         except Exception as e:
                             logging.error(f"Indexing failed for Docling source {rel_key}: {e}")
+
+                    # Files in this batch for which Docling produced no chunks at all
+                    # (e.g. fonts its PDF parser cannot read): fall back to plain text.
+                    produced = {
+                        self._normalize_doc_rel_path(Path(k), files_dir)
+                        for k in grouped if not k.startswith("__unknown__/")
+                    }
+                    for batch_file in batch_files:
+                        bf_path = Path(batch_file)
+                        bf_key = self._normalize_doc_rel_path(bf_path, files_dir)
+                        if bf_key in produced or self.state.is_doc_file_done(bf_key):
+                            continue
+                        if self._index_plain_text_fallback(bf_path, bf_key):
+                            round_indexed_sources += 1
                 except Exception as e:
                     if batch_files:
                         logging.error(
@@ -501,9 +515,19 @@ class DataIngestionApp:
         logging.info(f"Docling/torch info: {torch_info}")
         logging.info(f"Docling accelerator set to: {getattr(device, 'name', device)}")
 
-        accel = AcceleratorOptions(num_threads=min(os.cpu_count() or 1, 8), device=device)
+        num_threads = min(os.cpu_count() or 1, 8)
+        try:
+            configured_threads = int(getattr(self.config, "docling_num_threads", None) or 0)
+        except (TypeError, ValueError):
+            configured_threads = 0
+        if configured_threads > 0:
+            num_threads = configured_threads
+
+        accel = AcceleratorOptions(num_threads=num_threads, device=device)
         pdf_opts = PdfPipelineOptions()
         pdf_opts.accelerator_options = accel
+        pdf_opts.do_ocr = bool(getattr(self.config, "docling_do_ocr", True))
+        logging.info(f"Docling PDF options: do_ocr={pdf_opts.do_ocr}, num_threads={num_threads}")
 
         return DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
@@ -834,6 +858,67 @@ class DataIngestionApp:
             if not isinstance(d.metadata, dict):
                 d.metadata = {}
             d.metadata.update(meta)
+
+    def _index_plain_text_fallback(self, path: Path, rel_key: str) -> bool:
+        """
+        Index a PDF whose Docling conversion produced no chunks, using the PDF's
+        embedded text layer (pypdfium2) split with the token splitter.
+        Returns True if the file was indexed and marked done.
+        """
+        if path.suffix.lower() != ".pdf" or not path.exists():
+            logging.warning(
+                "Docling produced no chunks for %s and no plain-text fallback exists for this file type.",
+                rel_key,
+            )
+            return False
+
+        logging.warning(
+            "Docling produced no chunks for %s; falling back to plain PDF text extraction.", rel_key
+        )
+        try:
+            import pypdfium2 as pdfium
+
+            page_docs: List[Document] = []
+            pdf = pdfium.PdfDocument(str(path))
+            try:
+                for page_no in range(len(pdf)):
+                    page = pdf[page_no]
+                    textpage = page.get_textpage()
+                    try:
+                        text = textpage.get_text_range().replace("\r\n", "\n")
+                        # pdfium marks soft hyphens at line ends as U+FFFE: rejoin the word
+                        text = text.replace("￾\n", "").replace("￾", "").strip()
+                    finally:
+                        textpage.close()
+                        page.close()
+                    if text:
+                        page_docs.append(Document(
+                            page_content=text,
+                            metadata={"source": str(path), "page": page_no + 1, "extraction": "pdf_text_fallback"},
+                        ))
+            finally:
+                pdf.close()
+
+            if not page_docs:
+                logging.error(
+                    "Plain-text fallback found no text in %s (scanned PDF without text layer?). "
+                    "Enable docling_do_ocr or replace the file.", rel_key,
+                )
+                return False
+
+            chunks = self.get_token_splitter().split_documents(page_docs)
+            self._apply_remote_source_metadata(chunks, rel_key)
+            self._apply_content_metadata(chunks, rel_key)
+            self.indexer.index_documents(chunks, cleanup_mode="incremental")
+            self.state.mark_doc_file_done(rel_key)
+            logging.info(
+                "Indexed %s via plain-text fallback with %s chunk(s) from %s page(s) and marked done.",
+                rel_key, len(chunks), len(page_docs),
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Plain-text fallback failed for {rel_key}: {e}")
+            return False
 
     def _ingest_structured_files(self, files_dir: Path) -> None:
         """

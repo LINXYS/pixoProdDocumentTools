@@ -1,5 +1,6 @@
 # langchain_indexer.py
 import logging
+import re
 from typing import List, Optional
 
 from sqlalchemy import create_engine
@@ -19,6 +20,33 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_postgres import Column, PGEngine, PGVectorStore
 
 from cfg import IngestionConfig
+
+# C0 control characters except \t, \n, \r. Postgres TEXT/JSONB rejects NUL (0x00)
+# and the rest is extraction noise from broken PDF font maps.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+
+
+def _sanitize_value(value):
+    if isinstance(value, str):
+        return _CONTROL_CHARS_RE.sub("", value)
+    if isinstance(value, dict):
+        return {_sanitize_value(k): _sanitize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_value(v) for v in value)
+    return value
+
+
+def sanitize_documents(docs: List[Document]) -> List[Document]:
+    """Strip control characters (incl. NUL) from page_content and metadata, dropping empty chunks."""
+    cleaned: List[Document] = []
+    for d in docs:
+        d.page_content = _sanitize_value(d.page_content or "")
+        d.metadata = _sanitize_value(d.metadata or {})
+        if d.page_content.strip():
+            cleaned.append(d)
+    return cleaned
 
 
 def _is_duplicate_table_error(err: ProgrammingError) -> bool:
@@ -149,6 +177,7 @@ class LangChainIndexer:
             self.rm_engine.dispose()
         except Exception:
             pass
+        docs = sanitize_documents(list(docs))
         result = index(
             docs,
             self.record_manager,

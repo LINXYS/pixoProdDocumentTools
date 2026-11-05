@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 import yaml
 from dotenv import load_dotenv
@@ -34,6 +35,8 @@ DEFAULT_CONFIG = {
 DEFAULT_INGESTION_CONFIG = {
     "urls": [],
     "docling_batch_size": None,
+    "docling_do_ocr": True,
+    "docling_num_threads": None,
     "sitemap_url": None,
     "force_fresh_run": False,
     "css_selector": None,
@@ -65,6 +68,8 @@ class IngestionConfig:
             collection_name: str = "documents",
             record_manager_db_url: str = None,
             docling_batch_size: int | None = None,
+            docling_do_ocr: bool = True,
+            docling_num_threads: int | None = None,
             metadata_columns: list | None = None,
             # Ingestion-specific settings
             urls: list | None = None,
@@ -90,6 +95,9 @@ class IngestionConfig:
         self.collection_name = collection_name
         # Use the provided record_manager_db_url or default to the main database URL.
         self.docling_batch_size = docling_batch_size
+        # OCR loads extra models and is the main memory consumer on CPU; disable for text-layer PDFs
+        self.docling_do_ocr = bool(docling_do_ocr)
+        self.docling_num_threads = docling_num_threads
         self.record_manager_db_url = record_manager_db_url or database_url
         # Metadata keys stored as dedicated (filterable) table columns, e.g. ["content_type"]
         self.metadata_columns = list(metadata_columns or [])
@@ -114,20 +122,28 @@ class IngestionConfig:
 
     def __repr__(self):
         return (
-            f"IngestionConfig(database_url={self.database_url}, chunk_size={self.chunk_size}, "
+            f"IngestionConfig(database_url={_mask_url(self.database_url)}, chunk_size={self.chunk_size}, "
             f"chunk_overlap={self.chunk_overlap}, use_chunking={self.use_chunking}, "
             f"embedding_provider={self.embedding_provider}, embedding_model={self.embedding_model}, "
             f"vector_size={self.vector_size}, "
             f"collection_name={self.collection_name}, "
             f"urls={len(self.urls)} URLs, "
             f"docling_batch_size={getattr(self, 'docling_batch_size', None)}, "
+            f"docling_do_ocr={self.docling_do_ocr}, docling_num_threads={self.docling_num_threads}, "
             f"sitemap_url={self.sitemap_url}, "
             f"css_selector={self.css_selector}, "
             f"remote_source={'yes' if self.remote_source else 'no'}, "
             f"content_types={len(self.content_types)} rule(s), "
             f"metadata_columns={self.metadata_columns}, "
-            f"record_manager_db_url={self.record_manager_db_url})"
+            f"record_manager_db_url={_mask_url(self.record_manager_db_url)})"
         )
+
+def _mask_url(url: str | None) -> str | None:
+    """Hide the password in a connection URL for logging."""
+    if not url:
+        return url
+    return re.sub(r"(://[^:/@]+:)[^@]*@", r"\g<1>***@", url)
+
 
 def load_config(config_file: str = "config.yaml") -> IngestionConfig:
     """
@@ -226,6 +242,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         docling_batch_size = cfg.get("docling_batch_size")
 
     logging.info(f"Resolved docling_batch_size from config: {docling_batch_size!r}")
+    docling_do_ocr = ing.get("docling_do_ocr", True)
+    docling_num_threads = ing.get("docling_num_threads")
 
     print("Loaded collection_name:", collection_name)
 
@@ -251,6 +269,8 @@ def load_config(config_file: str = "config.yaml") -> IngestionConfig:
         llm_provider=llm_provider,
         collection_name=collection_name,
         docling_batch_size=docling_batch_size,
+        docling_do_ocr=docling_do_ocr,
+        docling_num_threads=docling_num_threads,
         record_manager_db_url=record_manager_db_url,
         metadata_columns=metadata_columns,
         # Ingestion-specific
